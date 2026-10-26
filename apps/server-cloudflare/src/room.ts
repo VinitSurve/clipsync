@@ -465,7 +465,7 @@ export class ClipSyncRoom extends DurableObject<Env> {
       now
     );
 
-    const origin = this.env.SERVER_ORIGIN ?? new URL(request.url).origin;
+    const origin = this.env.SERVER_ORIGIN ?? request.headers.get("x-public-origin") ?? new URL(request.url).origin;
     const pairingUrl = `clipsync://pair?code=${code}&server=${encodeURIComponent(origin)}&salt=${encodeURIComponent(this.syncSalt)}`;
 
     const resp: PairingSessionResponse = {

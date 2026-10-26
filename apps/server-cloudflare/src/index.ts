@@ -45,9 +45,11 @@ app.post("/v1/devices/register", async (c) => {
 // Create Pairing Session
 app.post("/v1/auth/pairing/session", async (c) => {
   const stub = getRoomStub(c);
+  const headers = new Headers(c.req.raw.headers);
+  headers.set("x-public-origin", new URL(c.req.url).origin);
   const internalReq = new Request("http://internal/internal/auth/pairing/session", {
     method: "POST",
-    headers: c.req.raw.headers,
+    headers,
   });
   return stub.fetch(internalReq);
 });

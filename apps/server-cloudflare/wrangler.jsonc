@@ -21,8 +21,5 @@
         "ClipSyncRoom"
       ]
     }
-  ],
-  "vars": {
-    "SERVER_ORIGIN": "http://localhost:8787"
-  }
+  ]
 }
