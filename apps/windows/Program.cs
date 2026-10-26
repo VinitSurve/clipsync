@@ -7,9 +7,10 @@ namespace ClipSync.Windows;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayApplicationContext());
+        string? initialUrl = args.Length > 0 ? args[0] : null;
+        Application.Run(new TrayApplicationContext(initialUrl));
     }
 }

@@ -52,11 +52,78 @@ public final class AppState: ObservableObject {
     private var token: String = ""
     private var syncSalt: String = ""
 
+    @Published public var launchAtLogin: Bool = false
+
+    private var launchAgentURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.clipsync.macos.plist")
+    }
+
+    private func checkLaunchAtLoginStatus() {
+        self.launchAtLogin = FileManager.default.fileExists(atPath: launchAgentURL.path)
+    }
+
+    public func setLaunchAtLogin(_ enabled: Bool) {
+        let fileManager = FileManager.default
+        let agentPath = launchAgentURL.path
+        let agentDir = launchAgentURL.deletingLastPathComponent().path
+
+        if enabled {
+            do {
+                if !fileManager.fileExists(atPath: agentDir) {
+                    try fileManager.createDirectory(atPath: agentDir, withIntermediateDirectories: true)
+                }
+
+                let executablePath: String
+                if Bundle.main.bundlePath.hasSuffix(".app") {
+                    executablePath = Bundle.main.executablePath ?? "/Applications/ClipSync.app/Contents/MacOS/ClipSync"
+                } else {
+                    executablePath = "/Applications/ClipSync.app/Contents/MacOS/ClipSync"
+                }
+
+                let plistContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+                <plist version="1.0">
+                <dict>
+                    <key>Label</key>
+                    <string>com.clipsync.macos</string>
+                    <key>ProgramArguments</key>
+                    <array>
+                        <string>\(executablePath)</string>
+                    </array>
+                    <key>RunAtLoad</key>
+                    <true/>
+                    <key>ProcessType</key>
+                    <string>Interactive</string>
+                </dict>
+                </plist>
+                """
+                try plistContent.write(toFile: agentPath, atomically: true, encoding: .utf8)
+                self.launchAtLogin = true
+                self.statusMessage = "Launch at login enabled"
+            } catch {
+                self.statusMessage = "Could not enable auto-launch: \(error.localizedDescription)"
+            }
+        } else {
+            do {
+                if fileManager.fileExists(atPath: agentPath) {
+                    try fileManager.removeItem(atPath: agentPath)
+                }
+                self.launchAtLogin = false
+                self.statusMessage = "Launch at login disabled"
+            } catch {
+                self.statusMessage = "Could not disable auto-launch: \(error.localizedDescription)"
+            }
+        }
+    }
+
     public init() {
         let savedUrl = UserDefaults.standard.string(forKey: Self.serverUrlKey) ?? "https://clipsync-server-cloudflare.survevinit56.workers.dev"
         let savedPass = UserDefaults.standard.string(forKey: Self.syncPassphraseKey) ?? "clipsync-master-sync-passphrase"
         self.serverUrl = savedUrl
         self.syncPassphrase = savedPass
+        checkLaunchAtLoginStatus()
         bootstrapDevice()
     }
 

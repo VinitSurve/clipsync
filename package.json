@@ -9,6 +9,8 @@
     "build:server": "pnpm --filter @clipsync/server build",
     "start:server": "pnpm --filter @clipsync/server start",
     "build": "pnpm -r run build",
+    "package:mac": "./scripts/package-macos.sh",
+    "install:mac": "./scripts/install-mac.sh",
     "test": "node --test packages/*/test/*.test.js apps/server/test/*.test.js apps/server-cloudflare/test/*.test.js",
     "typecheck": "pnpm -r run typecheck"
   },

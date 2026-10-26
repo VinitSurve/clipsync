@@ -299,6 +299,13 @@ public struct MenuBarView: View {
                 Toggle("Exclude Password Managers", isOn: .constant(true))
                     .toggleStyle(.checkbox)
                     .help("Prevents copying passwords from 1Password, Bitwarden, etc.")
+
+                Toggle("Start ClipSync at Login", isOn: Binding(
+                    get: { appState.launchAtLogin },
+                    set: { appState.setLaunchAtLogin($0) }
+                ))
+                .toggleStyle(.checkbox)
+                .help("Automatically launch ClipSync in the menu bar when your Mac turns on or logs in.")
             }
         }
         .padding(12)

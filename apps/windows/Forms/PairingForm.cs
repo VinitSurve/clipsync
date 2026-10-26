@@ -16,6 +16,7 @@ public sealed class PairingForm : Form
     private readonly Button _pairButton;
     private readonly Label _statusLabel;
     private readonly Action<ClaimPairingResponse> _onPairSuccess;
+    public string ServerUrl => _serverUrlTextBox.Text.Trim().TrimEnd('/');
 
     public PairingForm(string initialServerUrl, Action<ClaimPairingResponse> onPairSuccess)
     {
