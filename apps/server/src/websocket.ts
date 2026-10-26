@@ -1,5 +1,6 @@
 import type { Server } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import type { RawData } from "ws";
 import type { StorageAdapter, DeviceRecord } from "./db.js";
 import {
   type WsClientMessage,
@@ -96,7 +97,7 @@ export class WebSocketRelayManager {
     }
 
     // Handle messages
-    ws.on("message", async (raw: WebSocket.RawData) => {
+    ws.on("message", async (raw: RawData) => {
       try {
         const msg = JSON.parse(raw.toString()) as WsClientMessage;
         await this.handleClientMessage(ws, device, msg);
