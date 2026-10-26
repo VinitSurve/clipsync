@@ -222,20 +222,28 @@ public struct MenuBarView: View {
 
             VStack(spacing: 8) {
                 if let code = appState.activePairingCode {
-                    VStack(spacing: 4) {
-                        Text("Pairing Code")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    VStack(spacing: 6) {
+                        HStack {
+                            Text("Pairing Code")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Dismiss") {
+                                appState.activePairingCode = nil
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption2)
+                        }
                         Text(code)
-                            .font(.system(size: 24, weight: .bold, design: .monospaced))
+                            .font(.system(size: 26, weight: .bold, design: .monospaced))
                             .foregroundColor(.accentColor)
-                        Text("Enter this code on your Windows PC or Android phone")
+                        Text("Enter this 6-digit code on your Windows PC or Android phone")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
-                    .padding(8)
-                    .background(Color.accentColor.opacity(0.1))
+                    .padding(10)
+                    .background(Color.accentColor.opacity(0.12))
                     .cornerRadius(8)
                 } else {
                     Button(action: {
@@ -255,9 +263,35 @@ public struct MenuBarView: View {
 
     private var settingsView: some View {
         Form {
-            Section(header: Text("General").font(.caption).bold()) {
+            Section(header: Text("Server Connection").font(.caption).bold()) {
                 TextField("Server URL", text: $appState.serverUrl)
                     .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Button("Cloudflare") {
+                        appState.serverUrl = "https://clipsync-server-cloudflare.survevinit56.workers.dev"
+                        appState.bootstrapDevice()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Local Server") {
+                        appState.serverUrl = "http://localhost:8787"
+                        appState.bootstrapDevice()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Spacer()
+
+                    Button(action: {
+                        appState.bootstrapDevice()
+                    }) {
+                        Label("Save & Connect", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
 
                 SecureField("Master Sync Key", text: $appState.syncPassphrase)
                     .textFieldStyle(.roundedBorder)

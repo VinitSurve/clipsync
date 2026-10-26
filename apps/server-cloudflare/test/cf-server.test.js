@@ -55,6 +55,13 @@ describe("ClipSync Cloudflare Worker Integration Tests", () => {
     assert.equal(json.protocolVersion, 1);
   });
 
+  test("Path normalization: handles redundant slashes gracefully (e.g. //health)", async () => {
+    const res = await fetch(`${baseUrl}//health`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.ok, true);
+  });
+
   let deviceA;
   let deviceB;
 

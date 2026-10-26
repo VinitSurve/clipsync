@@ -8,6 +8,17 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.use("*", cors());
 
+// Normalize paths with redundant slashes (e.g. //v1 -> /v1)
+app.use("*", async (c, next) => {
+  const url = new URL(c.req.url);
+  if (url.pathname.includes("//")) {
+    const cleanPath = url.pathname.replace(/\/+/g, "/");
+    const cleanUrl = new URL(cleanPath + url.search, url.origin);
+    return app.fetch(new Request(cleanUrl, c.req.raw), c.env, c.executionCtx);
+  }
+  await next();
+});
+
 // Health check
 app.get("/health", (c) => {
   return c.json({
