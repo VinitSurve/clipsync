@@ -78,7 +78,7 @@ public sealed class WebSocketSyncService
                 _ = HeartbeatLoopAsync(_webSocket, ct);
                 await ReceiveLoopAsync(_webSocket, ct);
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
+            catch (Exception) when (!ct.IsCancellationRequested)
             {
                 OnStateChanged?.Invoke("Disconnected");
                 int delayMs = Math.Min((int)(1000 * Math.Pow(1.8, attempt)), 15000);

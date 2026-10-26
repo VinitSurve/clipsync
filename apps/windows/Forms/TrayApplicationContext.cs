@@ -49,9 +49,27 @@ public sealed class TrayApplicationContext : ApplicationContext
         contextMenu.Items.Add(new ToolStripSeparator());
         contextMenu.Items.Add("Exit ClipSync", null, (_, _) => ExitApp());
 
+        Icon trayIcon = SystemIcons.Application;
+        try
+        {
+            string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "AppIcon.ico");
+            if (File.Exists(iconPath))
+            {
+                trayIcon = new Icon(iconPath);
+            }
+            else if (File.Exists(Path.Combine("Resources", "AppIcon.ico")))
+            {
+                trayIcon = new Icon(Path.Combine("Resources", "AppIcon.ico"));
+            }
+        }
+        catch
+        {
+            trayIcon = SystemIcons.Application;
+        }
+
         _notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = trayIcon,
             ContextMenuStrip = contextMenu,
             Text = "ClipSync — Universal Clipboard",
             Visible = true
