@@ -180,6 +180,7 @@ export interface PairingSessionResponse {
   sessionId: string;
   code: string; // 6-digit numeric pairing code (e.g. "849201")
   qrData: string; // clipsync://pair?code=849201&session=...&host=...
+  qrDataUrl?: string;
   expiresAt: string;
   syncSalt: string;
 }

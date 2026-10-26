@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev:server": "pnpm --filter @clipsync/server dev",
+    "dev:cloudflare": "pnpm --filter @clipsync/server-cloudflare dev",
     "build:server": "pnpm --filter @clipsync/server build",
     "start:server": "pnpm --filter @clipsync/server start",
     "build": "pnpm -r run build",
-    "test": "node --test packages/*/test/*.test.js apps/server/test/*.test.js",
+    "test": "node --test packages/*/test/*.test.js apps/server/test/*.test.js apps/server-cloudflare/test/*.test.js",
     "typecheck": "pnpm -r run typecheck"
   },
   "dependencies": {

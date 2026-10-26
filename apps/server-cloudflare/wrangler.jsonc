@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clipsync-server-cloudflare",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-11-12",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CLIPSYNC_ROOM",
+        "class_name": "ClipSyncRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ClipSyncRoom"
+      ]
+    }
+  ],
+  "vars": {
+    "SERVER_ORIGIN": "http://localhost:8787"
+  }
+}

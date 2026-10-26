@@ -20,6 +20,7 @@ node_modules/
 # Build outputs
 dist/
 coverage/
+.wrangler/
 
 # macOS / Swift
 .DS_Store
