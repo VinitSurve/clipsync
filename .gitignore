@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment and sensitive credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.p12
+
+# Runtime & local data
+.clipsync-store*.json
+.clipsync-blobs/
+.data/
+*.log
+
+# Build outputs
+dist/
+coverage/
+
+# macOS / Swift
+.DS_Store
+.build/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Windows / .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Android / Gradle
+.gradle/
+local.properties
+*.apk
+*.aab
+.idea/
+*.iml

@@ -1,0 +1,27 @@
+{
+  "name": "clipsync",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:server": "pnpm --filter @clipsync/server dev",
+    "build:server": "pnpm --filter @clipsync/server build",
+    "start:server": "pnpm --filter @clipsync/server start",
+    "build": "pnpm -r run build",
+    "test": "node --test packages/*/test/*.test.js apps/server/test/*.test.js",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "dependencies": {
+    "@clipsync/protocol": "workspace:*",
+    "@clipsync/crypto": "workspace:*",
+    "@clipsync/sync-client": "workspace:*",
+    "@clipsync/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
