@@ -1,11 +1,14 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using ClipSync.Windows.Models;
+using ClipSync.Windows.Services;
 
 namespace ClipSync.Windows.Forms;
 
@@ -23,12 +26,30 @@ public sealed class SettingsForm : Form
     private ListView _devicesListView = null!;
     private Label _devicesStatusLabel = null!;
 
+    // Google Drive controls
+    private TextBox _googleClientIdTextBox = null!;
+    private TextBox _googleClientSecretTextBox = null!;
+    private Button _googleConnectButton = null!;
+    private Button _googleDisconnectButton = null!;
+    private Button _googleImportButton = null!;
+    private Label _googleStatusLabel = null!;
+
+    // Transfers controls
+    private ListView _transfersListView = null!;
+    private Button _retryTransferButton = null!;
+    private Button _cancelTransferButton = null!;
+    private Button _clearCompletedTransfersButton = null!;
+    private Button _openDownloadsButton = null!;
+    private Label _transfersStatusLabel = null!;
+
     private readonly string _deviceId;
     private readonly string _token;
     private readonly Action<string, string, string, bool> _onSave;
     private readonly Action _onReconnect;
     private readonly Func<bool> _onTogglePause;
     private readonly Action _onOpenPairing;
+    private readonly GoogleDriveService? _googleDrive;
+    private readonly TransferManager? _transferManager;
     private bool _isPaused;
 
     public SettingsForm(
@@ -44,7 +65,9 @@ public sealed class SettingsForm : Form
         Action<string, string, string, bool> onSave,
         Action onReconnect,
         Func<bool> onTogglePause,
-        Action onOpenPairing)
+        Action onOpenPairing,
+        GoogleDriveService? googleDrive = null,
+        TransferManager? transferManager = null)
     {
         _deviceId = currentDeviceId;
         _token = currentToken;
@@ -52,10 +75,12 @@ public sealed class SettingsForm : Form
         _onReconnect = onReconnect;
         _onTogglePause = onTogglePause;
         _onOpenPairing = onOpenPairing;
+        _googleDrive = googleDrive;
+        _transferManager = transferManager;
         _isPaused = isPaused;
 
         Text = "ClipSync - Settings";
-        Size = new Size(550, 580);
+        Size = new Size(580, 640);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -66,7 +91,7 @@ public sealed class SettingsForm : Form
         var tabControl = new TabControl
         {
             Dock = DockStyle.Fill,
-            Padding = new Point(16, 8),
+            Padding = new Point(14, 8),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Regular)
         };
 
@@ -80,15 +105,46 @@ public sealed class SettingsForm : Form
         BuildDevicesTab(tabDevices, currentDeviceId, currentDeviceLabel);
         tabControl.TabPages.Add(tabDevices);
 
-        // Tab 3: System & Storage
-        var tabSystem = new TabPage("System & Storage") { BackColor = Color.White };
+        // Tab 3: Google Drive & System
+        var tabSystem = new TabPage("Google Drive & System") { BackColor = Color.White };
         BuildSystemTab(tabSystem, isStartupEnabled);
         tabControl.TabPages.Add(tabSystem);
+
+        // Tab 4: Transfers
+        var tabTransfers = new TabPage("Transfers") { BackColor = Color.White };
+        BuildTransfersTab(tabTransfers);
+        tabControl.TabPages.Add(tabTransfers);
 
         Controls.Add(tabControl);
 
         // Load devices list in background
         _ = LoadDevicesAsync(currentServerUrl);
+
+        // Wire Google Drive status update
+        if (_googleDrive != null)
+        {
+            _googleDrive.OnAuthStatusChanged += () =>
+            {
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(UpdateGoogleDriveUI));
+                }
+            };
+            UpdateGoogleDriveUI();
+        }
+
+        // Wire Transfers update
+        if (_transferManager != null)
+        {
+            _transferManager.OnTransfersChanged += () =>
+            {
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(PopulateTransfersList));
+                }
+            };
+            PopulateTransfersList();
+        }
     }
 
     private void BuildConnectionTab(TabPage page, string url, string pass, string label, string connState, string detail)
@@ -100,14 +156,14 @@ public sealed class SettingsForm : Form
         {
             Text = "Live Connection Status",
             Location = new Point(14, 10),
-            Size = new Size(490, 95),
+            Size = new Size(520, 95),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
 
         _statusIconLabel = new Label
         {
             Location = new Point(16, 26),
-            Size = new Size(190, 24),
+            Size = new Size(200, 24),
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold)
         };
         UpdateConnectionStateUI(connState);
@@ -116,7 +172,7 @@ public sealed class SettingsForm : Form
         {
             Text = string.IsNullOrWhiteSpace(detail) ? "Ready" : detail,
             Location = new Point(16, 55),
-            Size = new Size(270, 32),
+            Size = new Size(280, 32),
             Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
             ForeColor = Color.DimGray
         };
@@ -124,8 +180,8 @@ public sealed class SettingsForm : Form
         _reconnectButton = new Button
         {
             Text = "Reconnect",
-            Location = new Point(295, 24),
-            Size = new Size(88, 30),
+            Location = new Point(310, 24),
+            Size = new Size(92, 30),
             Font = new Font("Segoe UI", 9f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
@@ -140,8 +196,8 @@ public sealed class SettingsForm : Form
         _pauseButton = new Button
         {
             Text = _isPaused ? "Resume Sync" : "Pause Sync",
-            Location = new Point(389, 24),
-            Size = new Size(90, 30),
+            Location = new Point(410, 24),
+            Size = new Size(96, 30),
             Font = new Font("Segoe UI", 9f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
@@ -162,7 +218,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Server Settings",
             Location = new Point(14, 115),
-            Size = new Size(490, 310),
+            Size = new Size(520, 340),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
 
@@ -178,7 +234,7 @@ public sealed class SettingsForm : Form
         {
             Text = url,
             Location = new Point(16, 48),
-            Size = new Size(458, 25),
+            Size = new Size(488, 25),
             Font = new Font("Segoe UI", 9.5f, FontStyle.Regular)
         };
 
@@ -214,7 +270,7 @@ public sealed class SettingsForm : Form
         {
             Text = pass,
             Location = new Point(16, 138),
-            Size = new Size(385, 25),
+            Size = new Size(415, 25),
             UseSystemPasswordChar = true,
             Font = new Font("Segoe UI", 9.5f, FontStyle.Regular)
         };
@@ -222,7 +278,7 @@ public sealed class SettingsForm : Form
         var chkShowPass = new CheckBox
         {
             Text = "Show",
-            Location = new Point(408, 138),
+            Location = new Point(438, 138),
             Size = new Size(66, 25),
             Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
         };
@@ -240,15 +296,15 @@ public sealed class SettingsForm : Form
         {
             Text = string.IsNullOrWhiteSpace(label) ? "Windows 10 PC" : label,
             Location = new Point(16, 198),
-            Size = new Size(458, 25),
+            Size = new Size(488, 25),
             Font = new Font("Segoe UI", 9.5f, FontStyle.Regular)
         };
 
         var saveButton = new Button
         {
             Text = "Save & Connect",
-            Location = new Point(16, 245),
-            Size = new Size(458, 42),
+            Location = new Point(16, 255),
+            Size = new Size(488, 42),
             BackColor = Color.FromArgb(0, 120, 215),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
@@ -291,7 +347,7 @@ public sealed class SettingsForm : Form
         {
             Text = "This PC",
             Location = new Point(14, 10),
-            Size = new Size(490, 80),
+            Size = new Size(520, 80),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
 
@@ -300,7 +356,7 @@ public sealed class SettingsForm : Form
         {
             Text = $"Device Label: {deviceLabel}\nDevice ID: {truncatedId}",
             Location = new Point(16, 26),
-            Size = new Size(310, 42),
+            Size = new Size(330, 42),
             Font = new Font("Segoe UI", 9f, FontStyle.Regular),
             ForeColor = Color.FromArgb(40, 40, 40)
         };
@@ -308,15 +364,12 @@ public sealed class SettingsForm : Form
         var btnPair = new Button
         {
             Text = "Pair Another Device...",
-            Location = new Point(332, 26),
-            Size = new Size(146, 36),
+            Location = new Point(356, 26),
+            Size = new Size(150, 36),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
-        btnPair.Click += (_, _) =>
-        {
-            _onOpenPairing();
-        };
+        btnPair.Click += (_, _) => _onOpenPairing();
 
         grpThisDevice.Controls.Add(lblId);
         grpThisDevice.Controls.Add(btnPair);
@@ -325,29 +378,29 @@ public sealed class SettingsForm : Form
         {
             Text = "Registered Sync Group Devices",
             Location = new Point(14, 100),
-            Size = new Size(490, 325),
+            Size = new Size(520, 360),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
 
         _devicesListView = new ListView
         {
             Location = new Point(16, 26),
-            Size = new Size(458, 245),
+            Size = new Size(488, 280),
             View = View.Details,
             FullRowSelect = true,
             GridLines = true,
             Font = new Font("Segoe UI", 9f, FontStyle.Regular)
         };
-        _devicesListView.Columns.Add("Device Label", 170);
-        _devicesListView.Columns.Add("Platform", 85);
-        _devicesListView.Columns.Add("Last Seen", 110);
+        _devicesListView.Columns.Add("Device Label", 180);
+        _devicesListView.Columns.Add("Platform", 90);
+        _devicesListView.Columns.Add("Last Seen", 120);
         _devicesListView.Columns.Add("Status", 80);
 
         _devicesStatusLabel = new Label
         {
             Text = "Loading paired devices...",
-            Location = new Point(16, 283),
-            Size = new Size(335, 24),
+            Location = new Point(16, 318),
+            Size = new Size(360, 24),
             Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
             ForeColor = Color.DimGray
         };
@@ -355,8 +408,8 @@ public sealed class SettingsForm : Form
         var btnRefresh = new Button
         {
             Text = "Refresh List",
-            Location = new Point(360, 278),
-            Size = new Size(114, 30),
+            Location = new Point(388, 313),
+            Size = new Size(116, 30),
             Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
@@ -375,12 +428,129 @@ public sealed class SettingsForm : Form
     {
         var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(14) };
 
-        // 1. Windows Startup GroupBox
+        // 1. Google Drive Integration GroupBox
+        var grpDrive = new GroupBox
+        {
+            Text = "Google Drive (Encrypted Image & File Storage)",
+            Location = new Point(14, 10),
+            Size = new Size(520, 220),
+            Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
+        };
+
+        var lblClientId = new Label
+        {
+            Text = "Google OAuth Client ID (Desktop App):",
+            Location = new Point(16, 26),
+            AutoSize = true,
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular)
+        };
+
+        _googleClientIdTextBox = new TextBox
+        {
+            Text = _googleDrive?.ClientId ?? "",
+            Location = new Point(16, 46),
+            Size = new Size(370, 25),
+            Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+        };
+        _googleClientIdTextBox.TextChanged += (_, _) =>
+        {
+            if (_googleDrive != null) _googleDrive.ClientId = _googleClientIdTextBox.Text;
+        };
+
+        _googleImportButton = new Button
+        {
+            Text = "Import JSON...",
+            Location = new Point(394, 44),
+            Size = new Size(110, 27),
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+            Cursor = Cursors.Hand
+        };
+        _googleImportButton.Click += (_, _) => ImportCredentialsJson();
+
+        var lblClientSecret = new Label
+        {
+            Text = "Client Secret (Optional, Desktop App credential):",
+            Location = new Point(16, 78),
+            AutoSize = true,
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular)
+        };
+
+        _googleClientSecretTextBox = new TextBox
+        {
+            Text = _googleDrive?.ClientSecret ?? "",
+            Location = new Point(16, 98),
+            Size = new Size(370, 25),
+            UseSystemPasswordChar = true,
+            Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+        };
+        _googleClientSecretTextBox.TextChanged += (_, _) =>
+        {
+            if (_googleDrive != null) _googleDrive.ClientSecret = _googleClientSecretTextBox.Text;
+        };
+
+        _googleConnectButton = new Button
+        {
+            Text = "Connect Google Drive",
+            Location = new Point(16, 135),
+            Size = new Size(170, 34),
+            BackColor = Color.FromArgb(16, 124, 65),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            Cursor = Cursors.Hand
+        };
+        _googleConnectButton.FlatAppearance.BorderSize = 0;
+        _googleConnectButton.Click += async (_, _) =>
+        {
+            if (_googleDrive != null)
+            {
+                _googleConnectButton.Enabled = false;
+                _googleConnectButton.Text = "Connecting...";
+                await _googleDrive.StartAuthorizationAsync();
+                _googleConnectButton.Enabled = true;
+                _googleConnectButton.Text = "Connect Google Drive";
+                UpdateGoogleDriveUI();
+            }
+        };
+
+        _googleDisconnectButton = new Button
+        {
+            Text = "Disconnect",
+            Location = new Point(194, 135),
+            Size = new Size(100, 34),
+            Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+            Cursor = Cursors.Hand
+        };
+        _googleDisconnectButton.Click += (_, _) =>
+        {
+            _googleDrive?.Disconnect();
+            UpdateGoogleDriveUI();
+        };
+
+        _googleStatusLabel = new Label
+        {
+            Text = "Status: Disconnected",
+            Location = new Point(16, 178),
+            Size = new Size(488, 32),
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+            ForeColor = Color.DimGray
+        };
+
+        grpDrive.Controls.Add(lblClientId);
+        grpDrive.Controls.Add(_googleClientIdTextBox);
+        grpDrive.Controls.Add(_googleImportButton);
+        grpDrive.Controls.Add(lblClientSecret);
+        grpDrive.Controls.Add(_googleClientSecretTextBox);
+        grpDrive.Controls.Add(_googleConnectButton);
+        grpDrive.Controls.Add(_googleDisconnectButton);
+        grpDrive.Controls.Add(_googleStatusLabel);
+
+        // 2. Windows Startup GroupBox
         var grpStartup = new GroupBox
         {
             Text = "Windows Startup Configuration",
-            Location = new Point(14, 10),
-            Size = new Size(490, 115),
+            Location = new Point(14, 240),
+            Size = new Size(520, 105),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
 
@@ -389,7 +559,7 @@ public sealed class SettingsForm : Form
             Text = "Start ClipSync automatically when Windows logs in",
             Checked = isStartupEnabled,
             Location = new Point(16, 26),
-            Size = new Size(455, 24),
+            Size = new Size(485, 24),
             Font = new Font("Segoe UI", 9f, FontStyle.Regular)
         };
 
@@ -397,16 +567,16 @@ public sealed class SettingsForm : Form
         {
             Text = isStartupEnabled ? "Status: Enabled in Windows Startup (Registry HKCU\\...\\Run)" : "Status: Disabled",
             Location = new Point(16, 53),
-            Size = new Size(455, 20),
+            Size = new Size(485, 20),
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = isStartupEnabled ? Color.Green : Color.DimGray
         };
 
         var lblStartupHint = new Label
         {
-            Text = "Runs ClipSync silently in your system tray upon Windows login without requiring terminal commands or console windows.",
+            Text = "Runs ClipSync silently in your system tray upon Windows login without terminal commands.",
             Location = new Point(16, 75),
-            Size = new Size(455, 30),
+            Size = new Size(485, 22),
             Font = new Font("Segoe UI", 8f, FontStyle.Regular),
             ForeColor = Color.Gray
         };
@@ -422,42 +592,12 @@ public sealed class SettingsForm : Form
         grpStartup.Controls.Add(_startupStatusLabel);
         grpStartup.Controls.Add(lblStartupHint);
 
-        // 2. File & Image Transfers Status GroupBox
-        var grpStorage = new GroupBox
-        {
-            Text = "File & Image Transfers (Google Drive)",
-            Location = new Point(14, 135),
-            Size = new Size(490, 110),
-            Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
-        };
-
-        var lblStorageStatus = new Label
-        {
-            Text = "Status: Not Available on Windows (Planned for Phase 2C)",
-            Location = new Point(16, 26),
-            Size = new Size(455, 20),
-            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(190, 100, 0)
-        };
-
-        var lblStorageDetail = new Label
-        {
-            Text = "Encrypted text clipboard sync is fully active. Temporary encrypted Google Drive storage (100 MB limit, 24h retention) for image and file sync is currently active on macOS and will be brought to Windows in Phase 2C.",
-            Location = new Point(16, 48),
-            Size = new Size(455, 52),
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-            ForeColor = Color.FromArgb(60, 60, 60)
-        };
-
-        grpStorage.Controls.Add(lblStorageStatus);
-        grpStorage.Controls.Add(lblStorageDetail);
-
         // 3. About GroupBox
         var grpAbout = new GroupBox
         {
             Text = "About ClipSync",
-            Location = new Point(14, 255),
-            Size = new Size(490, 170),
+            Location = new Point(14, 355),
+            Size = new Size(520, 160),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
 
@@ -465,22 +605,234 @@ public sealed class SettingsForm : Form
         {
             Text = "ClipSync - Universal End-to-End Encrypted Clipboard\n" +
                    "Version: 1.0.0 (Native Windows 64-bit Standalone)\n" +
-                   "Protocol Version: 1.0\n" +
+                   "Protocol Version: 1.0 | Phase 2C Image & File Sync Active\n" +
+                   "Storage: Google Drive (100% Free, 100 MB max per item, 24h retention)\n" +
                    "Cloud Backend: Cloudflare Workers + Durable Objects (100% Free Tier)\n" +
                    "Cryptography: AES-256-GCM, PBKDF2 100,000 iterations\n" +
-                   "Security Guarantee: End-to-end encrypted. Zero plaintext stored on cloud servers.",
+                   "Security: End-to-end encrypted. Zero plaintext stored on cloud servers.",
             Location = new Point(16, 25),
-            Size = new Size(455, 135),
+            Size = new Size(488, 125),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
             ForeColor = Color.FromArgb(50, 50, 50)
         };
 
         grpAbout.Controls.Add(lblAboutText);
 
+        panel.Controls.Add(grpDrive);
         panel.Controls.Add(grpStartup);
-        panel.Controls.Add(grpStorage);
         panel.Controls.Add(grpAbout);
         page.Controls.Add(panel);
+    }
+
+    private void BuildTransfersTab(TabPage page)
+    {
+        var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14) };
+
+        var grpTransfers = new GroupBox
+        {
+            Text = "Active & Recent Transfers",
+            Location = new Point(14, 10),
+            Size = new Size(520, 480),
+            Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
+        };
+
+        _transfersListView = new ListView
+        {
+            Location = new Point(16, 26),
+            Size = new Size(488, 350),
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+        };
+        _transfersListView.Columns.Add("File Name", 160);
+        _transfersListView.Columns.Add("Type", 65);
+        _transfersListView.Columns.Add("Size", 70);
+        _transfersListView.Columns.Add("Direction", 65);
+        _transfersListView.Columns.Add("Status", 115);
+
+        _transfersStatusLabel = new Label
+        {
+            Text = "No transfers recorded yet.",
+            Location = new Point(16, 386),
+            Size = new Size(488, 24),
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+            ForeColor = Color.DimGray
+        };
+
+        _retryTransferButton = new Button
+        {
+            Text = "Retry",
+            Location = new Point(16, 420),
+            Size = new Size(80, 30),
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+            Cursor = Cursors.Hand
+        };
+        _retryTransferButton.Click += (_, _) =>
+        {
+            if (_transfersListView.SelectedItems.Count > 0)
+            {
+                string? tid = _transfersListView.SelectedItems[0].Tag as string;
+                if (!string.IsNullOrEmpty(tid)) _transferManager?.RetryTransfer(tid);
+            }
+        };
+
+        _cancelTransferButton = new Button
+        {
+            Text = "Cancel",
+            Location = new Point(102, 420),
+            Size = new Size(80, 30),
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+            Cursor = Cursors.Hand
+        };
+        _cancelTransferButton.Click += (_, _) =>
+        {
+            if (_transfersListView.SelectedItems.Count > 0)
+            {
+                string? tid = _transfersListView.SelectedItems[0].Tag as string;
+                if (!string.IsNullOrEmpty(tid)) _transferManager?.CancelTransfer(tid);
+            }
+        };
+
+        _clearCompletedTransfersButton = new Button
+        {
+            Text = "Clear Finished",
+            Location = new Point(188, 420),
+            Size = new Size(110, 30),
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+            Cursor = Cursors.Hand
+        };
+        _clearCompletedTransfersButton.Click += (_, _) => _transferManager?.ClearCompleted();
+
+        _openDownloadsButton = new Button
+        {
+            Text = "Open Downloads",
+            Location = new Point(354, 420),
+            Size = new Size(150, 30),
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+            Cursor = Cursors.Hand
+        };
+        _openDownloadsButton.Click += (_, _) =>
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "ClipSync");
+            Directory.CreateDirectory(dir);
+            Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
+        };
+
+        grpTransfers.Controls.Add(_transfersListView);
+        grpTransfers.Controls.Add(_transfersStatusLabel);
+        grpTransfers.Controls.Add(_retryTransferButton);
+        grpTransfers.Controls.Add(_cancelTransferButton);
+        grpTransfers.Controls.Add(_clearCompletedTransfersButton);
+        grpTransfers.Controls.Add(_openDownloadsButton);
+
+        panel.Controls.Add(grpTransfers);
+        page.Controls.Add(panel);
+    }
+
+    private void UpdateGoogleDriveUI()
+    {
+        if (_googleDrive == null) return;
+
+        switch (_googleDrive.Status)
+        {
+            case GoogleDriveAuthStatus.Connected:
+                _googleStatusLabel.Text = $"[Connected] Google Account: {_googleDrive.AccountEmail ?? "Authorized"}";
+                _googleStatusLabel.ForeColor = Color.FromArgb(16, 124, 65);
+                _googleConnectButton.Enabled = false;
+                _googleDisconnectButton.Enabled = true;
+                break;
+            case GoogleDriveAuthStatus.Connecting:
+                _googleStatusLabel.Text = "[Connecting...] Waiting for browser authorization...";
+                _googleStatusLabel.ForeColor = Color.FromArgb(180, 130, 0);
+                _googleConnectButton.Enabled = false;
+                _googleDisconnectButton.Enabled = true;
+                break;
+            case GoogleDriveAuthStatus.Error:
+                _googleStatusLabel.Text = $"[Error] {_googleDrive.LastErrorMessage ?? "Authorization failed"}";
+                _googleStatusLabel.ForeColor = Color.FromArgb(190, 30, 30);
+                _googleConnectButton.Enabled = true;
+                _googleDisconnectButton.Enabled = false;
+                break;
+            default:
+                _googleStatusLabel.Text = "[Disconnected] Connect to enable encrypted image & file transfers";
+                _googleStatusLabel.ForeColor = Color.DimGray;
+                _googleConnectButton.Enabled = true;
+                _googleDisconnectButton.Enabled = false;
+                break;
+        }
+    }
+
+    private void ImportCredentialsJson()
+    {
+        using var ofd = new OpenFileDialog
+        {
+            Title = "Select Google Cloud credentials.json",
+            Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*"
+        };
+
+        if (ofd.ShowDialog(this) == DialogResult.OK)
+        {
+            var storage = new SecureTokenStorage();
+            var (cid, secret) = storage.AutoImportCredentialsJson(ofd.FileName);
+            if (!string.IsNullOrEmpty(cid))
+            {
+                _googleClientIdTextBox.Text = cid;
+                if (!string.IsNullOrEmpty(secret))
+                {
+                    _googleClientSecretTextBox.Text = secret;
+                }
+                MessageBox.Show(this, "Credentials successfully imported!", "ClipSync", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                MessageBox.Show(this, "Could not find client_id in the selected file.", "ClipSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+    }
+
+    private void PopulateTransfersList()
+    {
+        if (_transferManager == null || _transfersListView == null) return;
+
+        _transfersListView.BeginUpdate();
+        _transfersListView.Items.Clear();
+
+        var transfers = _transferManager.Transfers;
+        if (transfers.Count == 0)
+        {
+            _transfersStatusLabel.Text = "No transfers recorded yet.";
+        }
+        else
+        {
+            _transfersStatusLabel.Text = $"Showing {transfers.Count} transfer(s). Limit: 100 MB per item.";
+        }
+
+        foreach (var t in transfers)
+        {
+            string typeDesc = t.MimeType.StartsWith("image/") ? "Image" : (t.MimeType == "application/zip" ? "Archive" : "File");
+            string direction = t.IsOutgoing ? "Outgoing" : "Incoming";
+            string statusDesc = t.StatusText;
+            if (t.Status is TransferStatus.Uploading or TransferStatus.Downloading)
+            {
+                statusDesc = $"{t.StatusText} ({t.Progress:P0})";
+            }
+
+            var item = new ListViewItem(t.FileName);
+            item.SubItems.Add(typeDesc);
+            item.SubItems.Add(t.FormattedSize);
+            item.SubItems.Add(direction);
+            item.SubItems.Add(statusDesc);
+            item.Tag = t.Id;
+
+            if (t.Status == TransferStatus.Delivered) item.ForeColor = Color.FromArgb(16, 124, 65);
+            else if (t.Status == TransferStatus.Failed) item.ForeColor = Color.FromArgb(190, 30, 30);
+            else if (t.Status is TransferStatus.Uploading or TransferStatus.Downloading) item.ForeColor = Color.FromArgb(0, 102, 204);
+
+            _transfersListView.Items.Add(item);
+        }
+
+        _transfersListView.EndUpdate();
     }
 
     private void UpdateConnectionStateUI(string state)
@@ -518,44 +870,42 @@ public sealed class SettingsForm : Form
         try
         {
             _devicesStatusLabel.Text = "Fetching device list from server...";
-            using var http = new HttpClient();
-            http.Timeout = TimeSpan.FromSeconds(10);
-            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _token);
+            using var client = new HttpClient();
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{serverUrl}/v1/devices");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
 
-            var res = await http.GetAsync($"{serverUrl}/v1/devices");
-            if (res.IsSuccessStatusCode)
+            using var res = await client.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
             {
-                string json = await res.Content.ReadAsStringAsync();
-                var list = JsonSerializer.Deserialize<DeviceListResponse>(json);
-                _devicesListView.Items.Clear();
+                _devicesStatusLabel.Text = $"Failed to load devices (HTTP {res.StatusCode})";
+                return;
+            }
 
-                if (list?.Devices != null)
-                {
-                    foreach (var d in list.Devices)
-                    {
-                        var item = new ListViewItem(d.Label);
-                        item.SubItems.Add(d.Platform ?? "unknown");
-                        item.SubItems.Add(d.LastSeen != null && DateTime.TryParse(d.LastSeen, out var dt) ? dt.ToLocalTime().ToString("MMM dd HH:mm") : "Online");
-                        bool isCurrent = d.DeviceId == _deviceId || (d.IsCurrent.HasValue && d.IsCurrent.Value);
-                        item.SubItems.Add(isCurrent ? "This PC" : "Active");
-                        if (isCurrent)
-                        {
-                            item.Font = new Font(_devicesListView.Font, FontStyle.Bold);
-                            item.ForeColor = Color.FromArgb(0, 120, 215);
-                        }
-                        _devicesListView.Items.Add(item);
-                    }
-                    _devicesStatusLabel.Text = $"{list.Devices.Length} device(s) connected to this sync group.";
-                }
-            }
-            else
+            string json = await res.Content.ReadAsStringAsync();
+            var listResp = JsonSerializer.Deserialize<DeviceListResponse>(json);
+
+            if (listResp == null || listResp.Devices == null)
             {
-                _devicesStatusLabel.Text = $"Could not fetch devices (HTTP {(int)res.StatusCode}).";
+                _devicesStatusLabel.Text = "No paired devices found.";
+                return;
             }
+
+            _devicesListView.Items.Clear();
+            foreach (var dev in listResp.Devices)
+            {
+                string isCurrent = (dev.IsCurrent ?? false) || dev.DeviceId == _deviceId ? " (This PC)" : "";
+                var item = new ListViewItem(dev.Label + isCurrent);
+                item.SubItems.Add(dev.Platform.ToUpperInvariant());
+                item.SubItems.Add(string.IsNullOrEmpty(dev.LastSeen) ? "Active" : dev.LastSeen);
+                item.SubItems.Add((dev.IsCurrent ?? false) || dev.DeviceId == _deviceId ? "Current" : "Paired");
+                _devicesListView.Items.Add(item);
+            }
+
+            _devicesStatusLabel.Text = $"Total Paired Devices: {listResp.Devices.Length}";
         }
         catch (Exception ex)
         {
-            _devicesStatusLabel.Text = $"Device refresh failed: {ex.Message}";
+            _devicesStatusLabel.Text = $"Network error: {ex.Message}";
         }
     }
 }

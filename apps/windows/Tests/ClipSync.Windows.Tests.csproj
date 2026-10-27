@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RollForward>Major</RollForward>
+    <RootNamespace>ClipSync.Windows.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Crypto\ClipSyncCrypto.cs" Link="Crypto\ClipSyncCrypto.cs" />
+    <Compile Include="..\Models\TransferModels.cs" Link="Models\TransferModels.cs" />
+    <Compile Include="..\Models\SyncModels.cs" Link="Models\SyncModels.cs" />
+    <Compile Include="..\Services\SecureTokenStorage.cs" Link="Services\SecureTokenStorage.cs" />
+    <Compile Include="..\Services\TransferHelpers.cs" Link="Services\TransferHelpers.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
+  </ItemGroup>
+
+</Project>

@@ -24,6 +24,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private WebSocketSyncService? _syncService;
     private ClipSyncCrypto? _crypto;
+    private GoogleDriveService? _googleDriveService;
+    private TransferManager? _transferManager;
 
     private string _serverUrl = "https://clipsync-server-cloudflare.survevinit56.workers.dev";
     private string _syncPassphrase = "clipsync-master-sync-passphrase";
@@ -56,6 +58,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             SetStartup(true);
         }
+
+        _googleDriveService = new GoogleDriveService();
 
         _clipboardMonitor = new ClipboardMonitor();
         _clipboardMonitor.Show();
@@ -393,11 +397,33 @@ public sealed class TrayApplicationContext : ApplicationContext
         _crypto = new ClipSyncCrypto(_syncPassphrase, syncSalt);
         _syncService = new WebSocketSyncService(_serverUrl, deviceId, token, _crypto);
 
+        _googleDriveService ??= new GoogleDriveService();
+        _transferManager = new TransferManager(
+            _serverUrl,
+            deviceId,
+            token,
+            _crypto,
+            _googleDriveService,
+            _syncService,
+            _clipboardMonitor
+        );
+
+        _transferManager.OnTransferError += err =>
+        {
+            _notifyIcon.ShowBalloonTip(2500, "ClipSync Transfer", err, ToolTipIcon.Warning);
+        };
+
         _syncService.OnStateChanged += state =>
         {
             _connectionState = state;
             _lastStatusDetail = state == "Connected" ? "Connected to ClipSync" : state;
             UpdateTrayStatus();
+
+            if (state == "Connected")
+            {
+                _ = _transferManager.FetchPendingTransfersAsync();
+                _ = _googleDriveService.SweepOrphanedFilesAsync(TimeSpan.FromHours(24));
+            }
         };
 
         _syncService.OnStatusMessage += msg =>
@@ -507,7 +533,9 @@ public sealed class TrayApplicationContext : ApplicationContext
             onOpenPairing: () =>
             {
                 ShowPairing();
-            }
+            },
+            googleDrive: _googleDriveService,
+            transferManager: _transferManager
         );
 
         settingsForm.ShowDialog();

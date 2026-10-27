@@ -29,6 +29,13 @@ public sealed class WebSocketSyncService
     public event Action<SyncItem, string>? OnRemoteItemReceived;
     public event Action<string>? OnStatusMessage;
 
+    // Phase 2C: Large File & Image Transfer Events
+    public event Action<TransferManifest>? OnTransferAnnounced;
+    public event Action<string, string, long, long, string>? OnTransferProgressRelay; // tid, dev, bytes, total, phase
+    public event Action<string, string, bool, string?, bool>? OnTransferDelivered; // tid, recipient, allDelivered, driveFileId, shouldDelete
+    public event Action<string, string?>? OnTransferExpired; // tid, driveFileId
+    public event Action<string, string?>? OnTransferDeleted; // tid, driveFileId
+
     public WebSocketSyncService(string serverUrl, string deviceId, string token, ClipSyncCrypto crypto)
     {
         _serverUrl = serverUrl;
@@ -163,6 +170,47 @@ public sealed class WebSocketSyncService
                 case "device:joined":
                     OnStatusMessage?.Invoke("Device joined");
                     break;
+
+                case "transfer:announced":
+                    if (root.TryGetProperty("manifest", out var manifestProp))
+                    {
+                        var manifest = JsonSerializer.Deserialize<TransferManifest>(manifestProp.GetRawText());
+                        if (manifest != null)
+                        {
+                            OnTransferAnnounced?.Invoke(manifest);
+                        }
+                    }
+                    break;
+
+                case "transfer:progress_relay":
+                    string pTid = root.TryGetProperty("transferId", out var tidP) ? tidP.GetString() ?? "" : "";
+                    string pDev = root.TryGetProperty("deviceId", out var devP) ? devP.GetString() ?? "" : "";
+                    long pBytes = root.TryGetProperty("bytesTransferred", out var bP) ? bP.GetInt64() : 0;
+                    long pTotal = root.TryGetProperty("totalBytes", out var tP) ? tP.GetInt64() : 0;
+                    string pPhase = root.TryGetProperty("phase", out var phP) ? phP.GetString() ?? "" : "";
+                    OnTransferProgressRelay?.Invoke(pTid, pDev, pBytes, pTotal, pPhase);
+                    break;
+
+                case "transfer:delivered":
+                    string dltTid = root.TryGetProperty("transferId", out var dtP) ? dtP.GetString() ?? "" : "";
+                    string dltRec = root.TryGetProperty("recipientDeviceId", out var drP) ? drP.GetString() ?? "" : "";
+                    bool allDel = root.TryGetProperty("allDelivered", out var adP) && adP.GetBoolean();
+                    string? dltDfid = root.TryGetProperty("driveFileId", out var dfP) ? dfP.GetString() : null;
+                    bool shouldDel = root.TryGetProperty("shouldDelete", out var sdP) && sdP.GetBoolean();
+                    OnTransferDelivered?.Invoke(dltTid, dltRec, allDel, dltDfid, shouldDel);
+                    break;
+
+                case "transfer:expired":
+                    string expTid = root.TryGetProperty("transferId", out var etP) ? etP.GetString() ?? "" : "";
+                    string? expDfid = root.TryGetProperty("driveFileId", out var edfP) ? edfP.GetString() : null;
+                    OnTransferExpired?.Invoke(expTid, expDfid);
+                    break;
+
+                case "transfer:deleted":
+                    string delTid = root.TryGetProperty("transferId", out var delP) ? delP.GetString() ?? "" : "";
+                    string? delDfid = root.TryGetProperty("driveFileId", out var deldfP) ? deldfP.GetString() : null;
+                    OnTransferDeleted?.Invoke(delTid, delDfid);
+                    break;
             }
         }
         catch (Exception ex)
@@ -238,5 +286,63 @@ public sealed class WebSocketSyncService
             }
             catch { break; }
         }
+    }
+
+    public async Task SendTransferInitAsync(TransferManifest manifest)
+    {
+        if (IsPaused || _webSocket == null || _webSocket.State != WebSocketState.Open) return;
+        try
+        {
+            var msg = new { type = "transfer:init", manifest };
+            string json = JsonSerializer.Serialize(msg);
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WebSocket] SendTransferInit error: {ex.Message}");
+        }
+    }
+
+    public async Task SendTransferAckAsync(string transferId)
+    {
+        if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
+        try
+        {
+            var msg = new { type = "transfer:ack", transferId, recipientDeviceId = _deviceId };
+            string json = JsonSerializer.Serialize(msg);
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WebSocket] SendTransferAck error: {ex.Message}");
+        }
+    }
+
+    public async Task SendTransferProgressAsync(string transferId, long bytesTransferred, long totalBytes, string phase)
+    {
+        if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
+        try
+        {
+            var msg = new { type = "transfer:progress", transferId, bytesTransferred, totalBytes, phase };
+            string json = JsonSerializer.Serialize(msg);
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        catch { }
+    }
+
+    public async Task SendTransferCancelAsync(string transferId, string? reason = null)
+    {
+        if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
+        try
+        {
+            var msg = new { type = "transfer:cancel", transferId, reason = reason ?? "Cancelled by user" };
+            string json = JsonSerializer.Serialize(msg);
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        catch { }
     }
 }
