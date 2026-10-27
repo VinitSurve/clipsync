@@ -9,6 +9,7 @@
     <ApplicationIcon>Resources\AppIcon.ico</ApplicationIcon>
     <RootNamespace>ClipSync.Windows</RootNamespace>
     <AssemblyName>ClipSync</AssemblyName>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>

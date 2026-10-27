@@ -11,18 +11,17 @@ namespace ClipSync.Windows.Forms;
 
 public sealed class SettingsForm : Form
 {
-    private readonly TextBox _serverUrlTextBox;
-    private readonly TextBox _passphraseTextBox;
-    private readonly TextBox _deviceLabelTextBox;
-    private readonly CheckBox _startupCheckBox;
-    private readonly Label _startupStatusLabel;
-    private readonly Label _statusIconLabel;
-    private readonly Label _statusDetailLabel;
-    private readonly Button _saveButton;
-    private readonly Button _reconnectButton;
-    private readonly Button _pauseButton;
-    private readonly ListView _devicesListView;
-    private readonly Label _devicesStatusLabel;
+    private TextBox _serverUrlTextBox = null!;
+    private TextBox _passphraseTextBox = null!;
+    private TextBox _deviceLabelTextBox = null!;
+    private CheckBox _startupCheckBox = null!;
+    private Label _startupStatusLabel = null!;
+    private Label _statusIconLabel = null!;
+    private Label _statusDetailLabel = null!;
+    private Button _reconnectButton = null!;
+    private Button _pauseButton = null!;
+    private ListView _devicesListView = null!;
+    private Label _devicesStatusLabel = null!;
 
     private readonly string _deviceId;
     private readonly string _token;
@@ -55,7 +54,7 @@ public sealed class SettingsForm : Form
         _onOpenPairing = onOpenPairing;
         _isPaused = isPaused;
 
-        Text = "ClipSync — Settings";
+        Text = "ClipSync - Settings";
         Size = new Size(550, 580);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -132,7 +131,7 @@ public sealed class SettingsForm : Form
         };
         _reconnectButton.Click += (_, _) =>
         {
-            _statusIconLabel.Text = "🟡 Connecting...";
+            _statusIconLabel.Text = "[Connecting...]";
             _statusIconLabel.ForeColor = Color.FromArgb(180, 130, 0);
             _statusDetailLabel.Text = "Attempting immediate reconnection...";
             _onReconnect();
@@ -464,7 +463,7 @@ public sealed class SettingsForm : Form
 
         var lblAboutText = new Label
         {
-            Text = "ClipSync — Universal End-to-End Encrypted Clipboard\n" +
+            Text = "ClipSync - Universal End-to-End Encrypted Clipboard\n" +
                    "Version: 1.0.0 (Native Windows 64-bit Standalone)\n" +
                    "Protocol Version: 1.0\n" +
                    "Cloud Backend: Cloudflare Workers + Durable Objects (100% Free Tier)\n" +
@@ -489,20 +488,20 @@ public sealed class SettingsForm : Form
         switch (state.ToLowerInvariant())
         {
             case "connected":
-                _statusIconLabel.Text = "🟢 Connected";
+                _statusIconLabel.Text = "[Connected]";
                 _statusIconLabel.ForeColor = Color.FromArgb(16, 124, 65);
                 break;
             case "connecting...":
             case "connecting":
-                _statusIconLabel.Text = "🟡 Connecting...";
+                _statusIconLabel.Text = "[Connecting...]";
                 _statusIconLabel.ForeColor = Color.FromArgb(180, 130, 0);
                 break;
             case "paused":
-                _statusIconLabel.Text = "🟠 Paused";
+                _statusIconLabel.Text = "[Paused]";
                 _statusIconLabel.ForeColor = Color.FromArgb(200, 100, 0);
                 break;
             default:
-                _statusIconLabel.Text = "🔴 Disconnected";
+                _statusIconLabel.Text = "[Disconnected]";
                 _statusIconLabel.ForeColor = Color.FromArgb(190, 30, 30);
                 break;
         }

@@ -1,24 +1,31 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 title ClipSync Windows Installer
 
 echo ==========================================================================
-echo  ClipSync for Windows — One-Click Setup
+echo  ClipSync for Windows - One-Click Setup
 echo ==========================================================================
 echo.
 echo Installing ClipSync to your user programs folder, creating Start Menu
 echo and Desktop shortcuts, and enabling launch at Windows login...
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-windows.ps1"
-if %ERRORLEVEL% neq 0 (
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-windows.ps1"
+set "PS_EXIT=%ERRORLEVEL%"
+
+if %PS_EXIT% neq 0 (
     echo.
-    echo [ERROR] Installation encountered an error.
+    echo ==========================================================================
+    echo [ERROR] Installation failed with exit code %PS_EXIT%.
+    echo ==========================================================================
+    echo Please review the error message above.
     pause
-    exit /b %ERRORLEVEL%
+    exit /b %PS_EXIT%
 )
 
 echo.
+echo ==========================================================================
 echo Setup completed successfully! You can close this window.
-timeout /t 5
+echo ==========================================================================
+pause

@@ -22,7 +22,7 @@ public sealed class PairingForm : Form
     {
         _onPairSuccess = onPairSuccess;
 
-        Text = "ClipSync — Pair Device";
+        Text = "ClipSync - Pair Device";
         Size = new Size(380, 270);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;

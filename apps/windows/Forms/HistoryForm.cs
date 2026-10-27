@@ -20,7 +20,7 @@ public sealed class HistoryForm : Form
     {
         _onCopy = onCopy;
 
-        Text = "ClipSync — Clipboard History";
+        Text = "ClipSync - Clipboard History";
         Size = new Size(460, 480);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;

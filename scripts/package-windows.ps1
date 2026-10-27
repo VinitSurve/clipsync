@@ -16,9 +16,18 @@ if (Test-Path $DistDir) {
 }
 New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
 
+if (-not (Get-Command "dotnet" -ErrorAction SilentlyContinue)) {
+    Write-Error "The .NET 8.0 SDK was not found in PATH. Please install the .NET 8.0 SDK (https://dotnet.microsoft.com/download/dotnet/8.0) to package ClipSync."
+    exit 1
+}
+
 Push-Location $WindowsDir
 try {
-    dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $DistDir
+    dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "$DistDir"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "dotnet publish failed with exit code $LASTEXITCODE."
+        exit $LASTEXITCODE
+    }
 }
 finally {
     Pop-Location

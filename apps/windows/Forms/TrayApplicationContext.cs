@@ -104,7 +104,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             Icon = trayIcon,
             ContextMenuStrip = contextMenu,
-            Text = "ClipSync — Universal Clipboard",
+            Text = "ClipSync - Universal Clipboard",
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => ShowHistory();
@@ -293,7 +293,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         _statusMenuItem.Text = $"Status: {_connectionState}";
 
-        string tipText = $"ClipSync — {_connectionState}";
+        string tipText = $"ClipSync - {_connectionState}";
         if (tipText.Length > 63) tipText = tipText[..63];
         _notifyIcon.Text = tipText;
     }
@@ -447,9 +447,13 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ShowPairing()
     {
-        var pairingForm = new PairingForm(_serverUrl, claimed =>
+        PairingForm? pairingForm = null;
+        pairingForm = new PairingForm(_serverUrl, claimed =>
         {
-            _serverUrl = pairingForm.ServerUrl;
+            if (pairingForm != null)
+            {
+                _serverUrl = pairingForm.ServerUrl;
+            }
             _deviceLabel = claimed.Label;
             _syncService?.Stop();
             InitializeSync(claimed.DeviceId, claimed.Token, claimed.SyncSalt);

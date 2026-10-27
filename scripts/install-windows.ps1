@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Installs ClipSync Windows system tray application, sets up Start Menu & Desktop shortcuts,
+    Installs ClipSync Windows system tray application, sets up Start Menu and Desktop shortcuts,
     configures automatic startup at Windows login, and launches the application.
 #>
 param (
@@ -19,6 +19,11 @@ if (-not (Test-Path $DistExe)) {
     & (Join-Path $ScriptDir "package-windows.ps1")
 }
 
+if (-not (Test-Path $DistExe)) {
+    Write-Error "Could not find packaged ClipSync.exe at $DistExe. Please build the project first."
+    exit 1
+}
+
 $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\ClipSync"
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -35,12 +40,16 @@ Copy-Item -Path $DistExe -Destination $TargetExe -Force
 
 # Create Start Menu shortcut
 $StartMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+if (-not (Test-Path $StartMenuDir)) {
+    New-Item -ItemType Directory -Path $StartMenuDir -Force | Out-Null
+}
+
 $WshShell = New-Object -ComObject WScript.Shell
 
 $StartShortcut = $WshShell.CreateShortcut((Join-Path $StartMenuDir "ClipSync.lnk"))
 $StartShortcut.TargetPath = $TargetExe
 $StartShortcut.WorkingDirectory = $InstallDir
-$StartShortcut.Description = "ClipSync — Universal Clipboard"
+$StartShortcut.Description = "ClipSync - Universal Clipboard"
 $StartShortcut.IconLocation = "$TargetExe,0"
 $StartShortcut.Save()
 Write-Host "==> Created Start Menu shortcut at: $StartMenuDir\ClipSync.lnk" -ForegroundColor Green
@@ -52,7 +61,7 @@ if (-not $NoDesktopShortcut) {
         $DesktopShortcut = $WshShell.CreateShortcut((Join-Path $DesktopDir "ClipSync.lnk"))
         $DesktopShortcut.TargetPath = $TargetExe
         $DesktopShortcut.WorkingDirectory = $InstallDir
-        $DesktopShortcut.Description = "ClipSync — Universal Clipboard"
+        $DesktopShortcut.Description = "ClipSync - Universal Clipboard"
         $DesktopShortcut.IconLocation = "$TargetExe,0"
         $DesktopShortcut.Save()
         Write-Host "==> Created Desktop shortcut at: $DesktopDir\ClipSync.lnk" -ForegroundColor Green
@@ -61,7 +70,8 @@ if (-not $NoDesktopShortcut) {
 
 # Configure Automatic Startup on Windows login (HKCU Run Registry Key)
 $RunKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-Set-ItemProperty -Path $RunKey -Name "ClipSync" -Value "`"$TargetExe`"" -Force
+$RegistryValue = '"' + $TargetExe + '"'
+Set-ItemProperty -Path $RunKey -Name "ClipSync" -Value $RegistryValue -Force
 Write-Host "==> Configured auto-startup at Windows login (Registry: $RunKey\ClipSync)" -ForegroundColor Green
 
 # Launch the app in the system tray
@@ -72,10 +82,10 @@ if (-not $NoLaunch) {
 
 Write-Host ""
 Write-Host "==========================================================================" -ForegroundColor Green
-Write-Host "🎉 ClipSync Windows Installation Complete!" -ForegroundColor Green
+Write-Host "[OK] ClipSync Windows Installation Complete!" -ForegroundColor Green
 Write-Host "==========================================================================" -ForegroundColor Green
-Write-Host "• Application:      $TargetExe" -ForegroundColor White
-Write-Host "• Start Menu:       ClipSync" -ForegroundColor White
-Write-Host "• Start at Login:   Enabled (silent background tray launch)" -ForegroundColor White
-Write-Host "• Everyday Use:     Launch from Start Menu or Desktop. No commands required!" -ForegroundColor White
+Write-Host "- Application:      $TargetExe" -ForegroundColor White
+Write-Host "- Start Menu:       ClipSync" -ForegroundColor White
+Write-Host "- Start at Login:   Enabled (silent background tray launch)" -ForegroundColor White
+Write-Host "- Everyday Use:     Launch from Start Menu or Desktop. No commands required!" -ForegroundColor White
 Write-Host "==========================================================================" -ForegroundColor Green
