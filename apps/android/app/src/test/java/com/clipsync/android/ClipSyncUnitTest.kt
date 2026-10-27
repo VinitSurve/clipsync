@@ -5,6 +5,7 @@ import com.clipsync.android.models.EncryptedPayloadEnvelope
 import com.clipsync.android.models.SyncItem
 import com.clipsync.android.models.SyncItemMetadata
 import com.clipsync.android.service.ClipboardStateManager
+import com.clipsync.android.service.ClipSyncForegroundService
 import com.google.gson.Gson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -357,5 +358,34 @@ class ClipSyncUnitTest {
 
         assertFalse("Stale remote text must NOT overwrite fresh local copy even if timestamp is 0", shouldApply)
         assertNull("Stale pending remote text should be discarded", ClipboardStateManager.pendingRemoteText)
+    }
+
+    @Test
+    fun testOptionAAlertAndCaptureConstants() {
+        assertEquals("clipsync_copy_alerts_channel", ClipSyncForegroundService.CHANNEL_ALERT_ID)
+        assertEquals(1002, ClipSyncForegroundService.NOTIFICATION_ALERT_ID)
+        assertEquals("com.clipsync.action.CAPTURE_AND_SYNC", com.clipsync.android.ui.ClipSyncCaptureActivity.ACTION_CAPTURE_AND_SYNC)
+        assertEquals("com.clipsync.action.SYNC_TO_MAC", com.clipsync.android.ui.ClipSyncCaptureActivity.ACTION_SYNC_TO_MAC)
+        assertEquals("com.clipsync.action.APPLY_CLIPBOARD", com.clipsync.android.ui.ClipSyncCaptureActivity.ACTION_APPLY_CLIPBOARD)
+        assertEquals("extra_source", com.clipsync.android.ui.ClipSyncCaptureActivity.EXTRA_SOURCE)
+    }
+
+    @Test
+    fun testOptionDProcessTextPipelinePreservesClipboardIntegrity() {
+        // Simulating text selected in Chrome and dispatched via ACTION_PROCESS_TEXT
+        val selectedText = "Highlighted research article excerpt"
+        val selectedHash = ClipSyncCrypto.sha256(selectedText)
+
+        assertFalse("Unsynced selected text must not be considered already synced", ClipboardStateManager.isAlreadySynced(selectedHash))
+
+        // When transmitted to broker:
+        ClipboardStateManager.markSent(selectedText)
+        assertTrue("Selected text must be marked as sent after transmission", ClipboardStateManager.isAlreadySynced(selectedHash))
+        assertTrue("Selected text must be marked as echo to prevent loopback", ClipboardStateManager.isEcho(selectedHash))
+
+        // Different clipboard copy afterwards is allowed:
+        val laterCopy = "Different URL copied later"
+        val laterHash = ClipSyncCrypto.sha256(laterCopy)
+        assertFalse("Different local copy must not be blocked", ClipboardStateManager.isAlreadySynced(laterHash))
     }
 }

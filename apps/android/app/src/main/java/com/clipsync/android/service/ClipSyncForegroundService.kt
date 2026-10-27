@@ -56,6 +56,9 @@ class ClipSyncForegroundService : Service() {
     var pendingOutboundText: String? = null
         private set
 
+    @Volatile
+    private var lastAlertTime = 0L
+
     private val reconnectRunnable = Runnable {
         if (!isExplicitlyStopped && secureStorage.hasCredentials()) {
             connectWebSocket()
@@ -351,23 +354,54 @@ class ClipSyncForegroundService : Service() {
     }
 
     private fun onClipboardChanged() {
-        if (secureStorage.isPaused) return
+        if (secureStorage.isPaused || !secureStorage.hasCredentials()) return
 
-        try {
-            val clip = clipboardManager.primaryClip
-            if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).text?.toString()
-                if (!text.isNullOrBlank()) {
-                    val hash = ClipSyncCrypto.sha256(text)
-                    if (ClipboardStateManager.isEcho(hash) || ClipboardStateManager.isAlreadySynced(hash)) {
-                        return
-                    }
-                    broadcastText(text, isManual = false)
+        val syncId = "BGCLIP-" + UUID.randomUUID().toString().take(6)
+        val isForeground = ClipboardStateManager.isAppInForeground
+        Log.i(TAG, "[$syncId] Background onClipboardChanged listener invoked. isForeground=$isForeground")
+
+        if (isForeground) {
+            // MainActivity handles foreground clipboard inspection
+            return
+        }
+
+        // 1. Attempt direct read in case OS permits on this platform/ROM
+        val clip = try {
+            clipboardManager.primaryClip
+        } catch (e: Exception) {
+            Log.d(TAG, "[$syncId] Background primaryClip read threw: ${e.message}")
+            null
+        }
+
+        val hasClip = clip != null && clip.itemCount > 0
+        Log.i(TAG, "[$syncId] Background primaryClip read state: hasClip=$hasClip")
+
+        if (hasClip) {
+            val text = clip?.getItemAt(0)?.text?.toString()
+            if (!text.isNullOrBlank()) {
+                val hash = ClipSyncCrypto.sha256(text)
+                if (!ClipboardStateManager.isEcho(hash) && !ClipboardStateManager.isAlreadySynced(hash)) {
+                    Log.i(TAG, "[$syncId] Background clipboard read succeeded directly (len=${text.length}, hash=${hash.take(8)})")
+                    broadcastText(text, isManual = false, syncId = syncId)
+                    return
+                } else {
+                    Log.d(TAG, "[$syncId] Background clip is echo or already synced")
+                    return
                 }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "onClipboardChanged check skipped: ${e.message}")
         }
+
+        // 2. OS blocked background clipboard reading (standard Android 10+ privacy rule).
+        // Post a copy-detected alert notification with 1-tap "Sync to Mac" action.
+        val now = System.currentTimeMillis()
+        if (now - lastAlertTime < 1500L) {
+            Log.d(TAG, "[$syncId] Suppressing duplicate copy alert notification (debounced)")
+            return
+        }
+        lastAlertTime = now
+
+        Log.i(TAG, "[$syncId] Displaying copy-detected alert notification with 1-tap Sync to Mac action")
+        showCopyAlertNotification(syncId)
     }
 
     fun broadcastText(text: String, isManual: Boolean = false, syncId: String = "") {
@@ -438,6 +472,11 @@ class ClipSyncForegroundService : Service() {
                 val preview = if (text.length > 30) text.take(30) + "..." else text
                 updateNotification("Synced: $preview")
 
+                try {
+                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    nm.cancel(NOTIFICATION_ALERT_ID)
+                } catch (_: Exception) {}
+
                 // Also add locally to history
                 val broadcast = Intent(ACTION_ITEM_RECEIVED).apply {
                     putExtra("text", text)
@@ -467,16 +506,59 @@ class ClipSyncForegroundService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            val manager = getSystemService(NotificationManager::class.java)
+
+            // 1. Ongoing persistent foreground service channel
+            val serviceChannel = NotificationChannel(
                 CHANNEL_ID,
                 "ClipSync Live Clipboard",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Keeps universal clipboard synchronized across your devices"
             }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(serviceChannel)
+
+            // 2. High-importance channel for copy alerts with 1-tap Sync to Mac action
+            val alertChannel = NotificationChannel(
+                CHANNEL_ALERT_ID,
+                "ClipSync Copy Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts when new text is copied with 1-tap sync to Mac"
+                enableVibration(false)
+                setShowBadge(true)
+            }
+            manager.createNotificationChannel(alertChannel)
         }
+    }
+
+    private fun showCopyAlertNotification(syncId: String) {
+        val syncIntent = Intent(this, ClipSyncCaptureActivity::class.java).apply {
+            action = ClipSyncCaptureActivity.ACTION_CAPTURE_AND_SYNC
+            putExtra(ClipSyncCaptureActivity.EXTRA_SOURCE, "copy_alert")
+            putExtra(EXTRA_SYNC_ID, syncId)
+        }
+        val syncPendingIntent = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ALERT_ID,
+            syncIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notif = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
+            .setContentTitle("New text copied")
+            .setContentText("Tap to sync clipboard to Mac")
+            .setSmallIcon(android.R.drawable.ic_menu_agenda)
+            .setContentIntent(syncPendingIntent)
+            .addAction(android.R.drawable.ic_menu_send, "Sync to Mac", syncPendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setAutoCancel(true)
+            .setTimeoutAfter(30000)
+            .build()
+
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ALERT_ID, notif)
     }
 
     private fun buildNotification(contentText: String): Notification {
@@ -542,6 +624,10 @@ class ClipSyncForegroundService : Service() {
         isExplicitlyStopped = true
         cancelScheduledReconnect()
         try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ALERT_ID)
+        } catch (_: Exception) {}
+        try {
             clipboardManager.removePrimaryClipChangedListener(clipListener)
         } catch (_: Exception) {}
         try {
@@ -561,7 +647,9 @@ class ClipSyncForegroundService : Service() {
     companion object {
         const val TAG = "ClipSyncService"
         const val CHANNEL_ID = "clipsync_foreground_channel"
+        const val CHANNEL_ALERT_ID = "clipsync_copy_alerts_channel"
         const val NOTIFICATION_ID = 1001
+        const val NOTIFICATION_ALERT_ID = 1002
 
         const val EXTRA_OUTBOUND_TEXT = "extra_outbound_text"
         const val EXTRA_IS_MANUAL = "extra_is_manual"

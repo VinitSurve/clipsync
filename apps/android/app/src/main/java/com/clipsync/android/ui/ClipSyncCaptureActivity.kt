@@ -1,20 +1,25 @@
 package com.clipsync.android.ui
 
 import android.app.Activity
+import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import com.clipsync.android.service.ClipSyncForegroundService
 import com.clipsync.android.service.ClipboardStateManager
+import com.clipsync.android.storage.SecureStorage
+import java.util.UUID
 
 /**
  * Translucent, 0ms trampoline activity.
  * Needed on Android 10+ (API 29+) to access ClipboardManager with window focus
- * when triggered from Quick Settings Tile, Notification actions, or the
- * system text selection menu (ACTION_PROCESS_TEXT).
+ * when triggered from Copy Alert Notifications, Quick Settings Tile, or the
+ * system text-selection menu (ACTION_PROCESS_TEXT).
  */
 class ClipSyncCaptureActivity : Activity() {
 
@@ -23,53 +28,64 @@ class ClipSyncCaptureActivity : Activity() {
 
         val action = intent?.action
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val secureStorage = SecureStorage(this)
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Dismiss copy alert notification upon user interaction
+        nm.cancel(ClipSyncForegroundService.NOTIFICATION_ALERT_ID)
 
         when (action) {
             Intent.ACTION_PROCESS_TEXT -> {
-                // Triggered when user selects text in any app and picks "ClipSync"
+                val syncId = "PROCTEXT-" + UUID.randomUUID().toString().take(6)
                 val selectedText = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
-                if (!selectedText.isNullOrBlank()) {
+
+                if (selectedText.isNullOrBlank()) {
+                    Log.w(TAG, "[$syncId] ACTION_PROCESS_TEXT received empty or null selection")
+                    Toast.makeText(this, "ClipSync: No text selected", Toast.LENGTH_SHORT).show()
+                } else if (!secureStorage.hasCredentials()) {
+                    Log.w(TAG, "[$syncId] Device not paired; cannot sync text")
+                    Toast.makeText(this, "ClipSync: Device not paired", Toast.LENGTH_SHORT).show()
+                } else {
+                    Log.i(TAG, "[$syncId] ACTION_PROCESS_TEXT dispatching selected text (len=${selectedText.length})")
                     val syncIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
                         putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, selectedText)
                         putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
+                        putExtra(ClipSyncForegroundService.EXTRA_SYNC_ID, syncId)
                     }
-                    androidx.core.content.ContextCompat.startForegroundService(this, syncIntent)
+                    ContextCompat.startForegroundService(this, syncIntent)
                     val preview = if (selectedText.length > 25) selectedText.take(25) + "..." else selectedText
-                    Toast.makeText(this, "ClipSync: Synced selection \"$preview\"", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "ClipSync: Synced selection to Mac (\"$preview\")", Toast.LENGTH_SHORT).show()
                 }
             }
 
-            ACTION_CAPTURE_AND_SYNC -> {
-                // If there is pending remote text waiting to be applied, prioritize applying it
-                val pending = ClipboardStateManager.pendingRemoteText
-                val pendingSource = ClipboardStateManager.pendingRemoteSource ?: "desktop"
-                if (!pending.isNullOrBlank()) {
-                    ClipboardStateManager.markAppliedLocally(pending)
-                    val clip = ClipData.newPlainText("ClipSync", pending)
-                    cm.setPrimaryClip(clip)
-                    val preview = if (pending.length > 25) pending.take(25) + "..." else pending
-                    Toast.makeText(this, "ClipSync: Applied from $pendingSource \"$preview\"", Toast.LENGTH_SHORT).show()
+            ACTION_CAPTURE_AND_SYNC, ACTION_SYNC_TO_MAC -> {
+                val syncId = "NOTIFSYNC-" + UUID.randomUUID().toString().take(6)
+                if (!secureStorage.hasCredentials()) {
+                    Log.w(TAG, "[$syncId] Device not paired; cannot sync clipboard")
+                    Toast.makeText(this, "ClipSync: Device not paired", Toast.LENGTH_SHORT).show()
                 } else {
-                    // Otherwise capture current clipboard and sync to desktop
                     try {
                         val clip = cm.primaryClip
-                        if (clip != null && clip.itemCount > 0) {
-                            val text = clip.getItemAt(0).text?.toString()
-                            if (!text.isNullOrBlank()) {
-                                val syncIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
-                                    putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
-                                    putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
-                                }
-                                androidx.core.content.ContextCompat.startForegroundService(this, syncIntent)
-                                val preview = if (text.length > 25) text.take(25) + "..." else text
-                                Toast.makeText(this, "ClipSync: Synced \"$preview\"", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(this, "ClipSync: Clipboard is empty", Toast.LENGTH_SHORT).show()
+                        val hasClip = clip != null
+                        val itemCount = clip?.itemCount ?: 0
+                        val text = if (hasClip && itemCount > 0) clip?.getItemAt(0)?.text?.toString() else null
+
+                        Log.i(TAG, "[$syncId] Capture and sync triggered: hasClip=$hasClip, itemCount=$itemCount, textLen=${text?.length ?: 0}")
+
+                        if (!text.isNullOrBlank()) {
+                            val syncIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                                putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
+                                putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
+                                putExtra(ClipSyncForegroundService.EXTRA_SYNC_ID, syncId)
                             }
+                            ContextCompat.startForegroundService(this, syncIntent)
+                            val preview = if (text.length > 25) text.take(25) + "..." else text
+                            Toast.makeText(this, "ClipSync: Synced to Mac (\"$preview\")", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(this, "ClipSync: Clipboard is empty", Toast.LENGTH_SHORT).show()
                         }
                     } catch (e: Exception) {
+                        Log.e(TAG, "[$syncId] Clipboard capture error: ${e.message}")
                         Toast.makeText(this, "ClipSync capture error: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -86,13 +102,16 @@ class ClipSyncCaptureActivity : Activity() {
             }
         }
 
-        // Close immediately
+        // Close immediately without opening MainActivity
         finish()
     }
 
     companion object {
+        const val TAG = "ClipSyncCaptureActivity"
         const val ACTION_CAPTURE_AND_SYNC = "com.clipsync.action.CAPTURE_AND_SYNC"
+        const val ACTION_SYNC_TO_MAC = "com.clipsync.action.SYNC_TO_MAC"
         const val ACTION_APPLY_CLIPBOARD = "com.clipsync.action.APPLY_CLIPBOARD"
         const val EXTRA_TEXT_TO_APPLY = "extra_text_to_apply"
+        const val EXTRA_SOURCE = "extra_source"
     }
 }
