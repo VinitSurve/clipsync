@@ -4,6 +4,20 @@ Native Kotlin Android client for ClipSync universal clipboard synchronization ac
 
 ---
 
+## 📥 Official Download & Quick Installation
+
+[![Download Latest Android APK](https://img.shields.io/badge/Download-ClipSync.apk-107C41?style=for-the-badge&logo=android&logoColor=white)](https://github.com/VinitSurve/clipsync/releases/latest/download/ClipSync.apk)
+
+- **Stable Latest APK**: [Download ClipSync.apk](https://github.com/VinitSurve/clipsync/releases/latest/download/ClipSync.apk)
+- **All Releases & Checksums**: [GitHub Releases](https://github.com/VinitSurve/clipsync/releases)
+- **1-Click Phone Installation (No ADB Required)**:
+  1. Download `ClipSync.apk` directly on your Android device.
+  2. When prompted *"For your security, your phone is not allowed to install unknown apps from this source"*, tap **Settings** and enable **Allow from this source**.
+  3. Tap **Install** (or **Update**). All official releases share the same signing certificate, allowing smooth in-place updates.
+  4. *Note: USB debugging, Developer Options, ADB, and wireless debugging are NOT required.*
+
+---
+
 ## Architecture & Implementation Overview
 
 ### Phase 1: Native Android Foundation

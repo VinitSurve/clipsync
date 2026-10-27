@@ -47,5 +47,9 @@ local.properties
 **/build/
 *.apk
 *.aab
+*.jks
+*.keystore
+signing/
 .idea/
 *.iml
+

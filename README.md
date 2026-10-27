@@ -6,6 +6,36 @@ Copy anything on one device and instantly paste it on another with zero-knowledg
 
 ---
 
+## 📱 Download Android Client
+
+[![Download Latest Android APK](https://img.shields.io/badge/Download-ClipSync.apk-107C41?style=for-the-badge&logo=android&logoColor=white)](https://github.com/VinitSurve/clipsync/releases/latest/download/ClipSync.apk)
+
+- 📥 **Direct Download Link**: **[Download Latest ClipSync.apk](https://github.com/VinitSurve/clipsync/releases/latest/download/ClipSync.apk)** *(Always points to the stable latest release)*
+- 📦 **All Releases & Changelogs**: [GitHub Releases](https://github.com/VinitSurve/clipsync/releases)
+- 🔒 **Integrity Checksum**: [ClipSync.apk.sha256](https://github.com/VinitSurve/clipsync/releases/latest/download/ClipSync.apk.sha256)
+
+### 🚀 1-Click Phone Installation (No ADB or Computer Required)
+You do **NOT** need USB debugging, Developer Options, wireless debugging, or ADB to install ClipSync on your phone:
+1. **Download**: Open the download link above directly on your Android phone (e.g. in Chrome).
+2. **Permission Prompt**: If Android displays *"For your security, your phone is not allowed to install unknown apps from this source"*:
+   - Tap **Settings** on the prompt.
+   - Toggle **Allow from this source** to **ON** for your browser / file manager.
+   - Press Back and tap **Install** (or **Update**).
+3. **Open & Pair**: Open ClipSync, tap **Pair Device**, and enter the 6-digit code shown on your Mac or Windows PC.
+
+### 🛡️ Seamless Updates & Troubleshooting
+- **In-Place Updates**: All official releases are signed with a persistent release key and use the same application ID (`com.clipsync.android`). Future updates install directly over existing versions without losing your paired devices or clipboard history.
+- **"App not installed as package conflicts with an existing package"**: If you previously installed a debug test build via ADB or Android Studio, Android will block upgrading because debug and release signatures differ. Simply uninstall the old debug version once, then install the official `ClipSync.apk`.
+- **Verify Checksum**:
+  ```bash
+  # macOS / Linux
+  shasum -a 256 ClipSync.apk
+  # Windows PowerShell
+  Get-FileHash ClipSync.apk -Algorithm SHA256
+  ```
+
+---
+
 ## 🏗 System Architecture
 
 ```
@@ -33,6 +63,8 @@ Copy anything on one device and instantly paste it on another with zero-knowledg
 
 ```
 clipsync/
+├── .github/
+│   └── workflows/    # Automated CI/CD (Android APK build, signing & GitHub Releases)
 ├── apps/
 │   ├── server/       # Node.js + TypeScript REST & WebSocket relay service
 │   ├── macos/        # Native Swift & SwiftUI menu bar application
@@ -43,6 +75,7 @@ clipsync/
 │   ├── crypto/       # AES-256-GCM authenticated encryption & PBKDF2 key derivation
 │   └── sync-client/  # Universal client engine with loop prevention & reconnects
 ├── infrastructure/   # Docker Compose (PostgreSQL 16, MinIO S3, ClipSync Server)
+├── scripts/          # Keystore generator & platform installation scripts
 └── docs/             # Security model, architecture, and production deployment guides
 ```
 
@@ -98,15 +131,18 @@ dotnet run
 - Zero-lag copy detection via Win32 `AddClipboardFormatListener`.
 - Hardware-accelerated `System.Security.Cryptography.AesGcm`.
 
-### Android Companion App
-Built with Kotlin and Android SDK:
-```bash
-cd apps/android
-./gradlew assembleDebug
-```
-- Uses an ongoing Foreground Service notification to maintain WebSocket connection.
-- Includes a **Quick Settings Tile** ("Sync Clipboard") for instant one-tap copy from inside any app.
-- QR Code scanner and 6-digit numeric pairing.
+### Android Companion App (Redmi / Android)
+- **Install APK directly**: [Download Latest ClipSync.apk](https://github.com/VinitSurve/clipsync/releases/latest/download/ClipSync.apk)
+- Or build locally from source:
+  ```bash
+  cd apps/android
+  ./gradlew assembleDebug
+  ```
+- Features:
+  - Uses an ongoing Foreground Service notification to maintain WebSocket connection.
+  - Includes a **Quick Settings Tile** ("Sync Clipboard") for instant one-tap copy from inside any app.
+  - QR Code scanner and 6-digit numeric pairing.
+  - Hardware-backed `EncryptedSharedPreferences` via Android Keystore.
 
 ---
 
