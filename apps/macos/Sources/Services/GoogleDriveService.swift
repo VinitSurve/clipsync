@@ -34,16 +34,24 @@ public final class GoogleDriveService: NSObject, ObservableObject {
 
     private static let clientIdKey = "clipsync.google.clientId"
     private static let userEmailKey = "clipsync.google.userEmail"
+    private static let googleProjectIdKey = "clipsync.google.projectId"
     private static let keychainRefreshTokenKey = "clipsync.google.refreshToken"
     private static let keychainClientSecretKey = "clipsync.google.clientSecret"
 
     private let scope = "https://www.googleapis.com/auth/drive.file"
 
     @Published public var authStatus: GoogleDriveAuthStatus = .disconnected
+    @Published public private(set) var projectId: String?
     @Published public var clientId: String {
         didSet {
             UserDefaults.standard.set(clientId, forKey: Self.clientIdKey)
         }
+    }
+
+    public var clientIdPrefix: String? {
+        let trimmed = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed.prefix(16)) + "..."
     }
 
     private var accessToken: String?
@@ -53,7 +61,9 @@ public final class GoogleDriveService: NSObject, ObservableObject {
     override public init() {
         let savedClientId = UserDefaults.standard.string(forKey: Self.clientIdKey) ?? ""
         self.clientId = savedClientId
+        self.projectId = UserDefaults.standard.string(forKey: Self.googleProjectIdKey) ?? "clipsync-512808"
         super.init()
+
 
         // Auto-discover credentials if available
         _ = loadClientSecretIfAvailable()
@@ -109,11 +119,18 @@ public final class GoogleDriveService: NSObject, ObservableObject {
             self.clientId = credClientId.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        if let credProjectId = clientDict["project_id"] as? String ?? json["project_id"] as? String, !credProjectId.isEmpty {
+            UserDefaults.standard.set(credProjectId, forKey: Self.googleProjectIdKey)
+            self.projectId = credProjectId
+            print("[OAuth] Loaded project_id: \(credProjectId)")
+        }
+
         if let credSecret = clientDict["client_secret"] as? String, !credSecret.isEmpty {
             _ = KeychainHelper.shared.save(key: Self.keychainClientSecretKey, string: credSecret)
             print("[OAuth] Loaded client_secret and securely saved to Keychain")
             return credSecret
         }
+
 
         return nil
     }

@@ -87,14 +87,28 @@ public static class TransferHelpers
         return sb.ToString();
     }
 
+    public static bool IsValidClipSyncProject(string? projectId)
+    {
+        if (string.IsNullOrWhiteSpace(projectId)) return true; // Legacy or manual client ID without project_id
+        return projectId.IndexOf("clipsync", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    public static string FormatProjectMismatchWarning(string? projectId)
+    {
+        return $"Warning: Connected Google Cloud Project '{projectId}' does not match 'clipsync'. " +
+               "Google Drive scope restricts file access to the same project. " +
+               "Please import the ClipSync credentials.json in Settings.";
+    }
+
     public static string ParseDriveError(string rawJson, System.Net.HttpStatusCode statusCode)
     {
         if (statusCode == System.Net.HttpStatusCode.NotFound)
         {
             return "Download failed (HTTP 404): File not found in Google Drive. " +
                    "The temporary file may have expired (>24h), been purged, " +
-                   "or was uploaded using a different Google account. " +
-                   "Ensure Mac and Windows are signed into the same Google account.";
+                   "or was uploaded using a different Google Cloud Project or account. " +
+                   "Ensure Mac and Windows are authorized under the same Google Cloud Project (e.g. clipsync-512808) " +
+                   "and the same Google account. Verify Project ID in Settings.";
         }
 
         if (statusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
@@ -103,6 +117,7 @@ public static class TransferHelpers
                    "Your Google authorization may have expired or lacks access to this file. " +
                    "Please reconnect Google Drive in Settings.";
         }
+
 
         try
         {

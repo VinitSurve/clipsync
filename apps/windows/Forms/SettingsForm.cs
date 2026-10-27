@@ -952,11 +952,27 @@ public sealed class SettingsForm : Form
             }
         }
 
+        string projectDisplay = _googleDrive.ProjectId ?? "(Not imported)";
+        string clientPrefix = _googleDrive.ClientIdPrefix ?? "(Not configured)";
+        bool hasMismatch = !string.IsNullOrEmpty(_googleDrive.ProjectId) &&
+                           !_googleDrive.ProjectId.Contains("clipsync", StringComparison.OrdinalIgnoreCase);
+
         switch (_googleDrive.Status)
         {
             case GoogleDriveAuthStatus.Connected:
-                _googleStatusLabel.Text = $"[Connected] Google Account: {_googleDrive.AccountEmail ?? "Authorized"}";
-                _googleStatusLabel.ForeColor = Color.FromArgb(16, 124, 65);
+                if (hasMismatch)
+                {
+                    _googleStatusLabel.Text = $"[Connected - Project Mismatch!]\n" +
+                        $"Account: {_googleDrive.AccountEmail ?? "Authorized"} | Project: {projectDisplay}\n" +
+                        $"Warning: Connected to '{projectDisplay}'. Must use 'clipsync' project credentials to sync with Mac.";
+                    _googleStatusLabel.ForeColor = Color.FromArgb(190, 30, 30);
+                }
+                else
+                {
+                    _googleStatusLabel.Text = $"[Connected] Account: {_googleDrive.AccountEmail ?? "Authorized"}\n" +
+                        $"Project: {projectDisplay} | Client: {clientPrefix}";
+                    _googleStatusLabel.ForeColor = Color.FromArgb(16, 124, 65);
+                }
                 _googleConnectButton.Enabled = false;
                 _googleDisconnectButton.Enabled = true;
                 break;
@@ -967,14 +983,25 @@ public sealed class SettingsForm : Form
                 _googleDisconnectButton.Enabled = true;
                 break;
             case GoogleDriveAuthStatus.Error:
-                _googleStatusLabel.Text = $"[Error] {_googleDrive.LastErrorMessage ?? "Authorization failed"}";
+                _googleStatusLabel.Text = $"[Error] {_googleDrive.LastErrorMessage ?? "Authorization failed"}\n" +
+                    $"Project: {projectDisplay} | Client: {clientPrefix}";
                 _googleStatusLabel.ForeColor = Color.FromArgb(190, 30, 30);
                 _googleConnectButton.Enabled = true;
                 _googleDisconnectButton.Enabled = false;
                 break;
             default:
-                _googleStatusLabel.Text = "[Disconnected] Connect to enable encrypted image & file transfers";
-                _googleStatusLabel.ForeColor = Color.DimGray;
+                if (hasMismatch)
+                {
+                    _googleStatusLabel.Text = $"[Disconnected - Project Mismatch]\n" +
+                        $"Project: {projectDisplay} (Must match 'clipsync') | Client: {clientPrefix}";
+                    _googleStatusLabel.ForeColor = Color.FromArgb(190, 30, 30);
+                }
+                else
+                {
+                    _googleStatusLabel.Text = $"[Disconnected] Project: {projectDisplay} | Client: {clientPrefix}\n" +
+                        $"Connect to enable encrypted image & file transfers";
+                    _googleStatusLabel.ForeColor = Color.DimGray;
+                }
                 _googleConnectButton.Enabled = true;
                 _googleDisconnectButton.Enabled = false;
                 break;
@@ -993,7 +1020,7 @@ public sealed class SettingsForm : Form
         {
             if (_googleDrive != null)
             {
-                var (cid, secret) = _googleDrive.ImportCredentialsFile(ofd.FileName);
+                var (cid, secret, projectId) = _googleDrive.ImportCredentialsFile(ofd.FileName);
                 if (!string.IsNullOrEmpty(cid))
                 {
                     _googleClientIdTextBox.Text = cid;
@@ -1005,11 +1032,28 @@ public sealed class SettingsForm : Form
 
                     string previewCid = cid.Length > 20 ? cid[..20] + "..." : cid;
                     string secretStatus = !string.IsNullOrEmpty(secret) ? "Configured & saved to DPAPI" : "None found in file";
-                    MessageBox.Show(this,
-                        $"Credentials successfully imported!\n\nClient ID: {previewCid}\nClient Secret: {secretStatus}",
-                        "ClipSync - Credentials Imported",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
+                    string projectInfo = !string.IsNullOrEmpty(projectId) ? projectId : "Unspecified";
+
+                    if (!string.IsNullOrEmpty(projectId) && !projectId.Contains("clipsync", StringComparison.OrdinalIgnoreCase))
+                    {
+                        MessageBox.Show(this,
+                            $"Warning: The selected credentials belong to Google Cloud project '{projectId}', NOT ClipSync.\n\n" +
+                            "Google Drive restricts file access to the specific project that created the file. " +
+                            "If Mac uploads files under 'clipsync-512808', Windows will receive 'HTTP 404: File not found' " +
+                            "unless both devices use the same 'clipsync' Google Cloud Project credentials.\n\n" +
+                            "Please obtain credentials.json for your 'clipsync' project from Google Cloud Console.",
+                            "Google Cloud Project Mismatch",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                    }
+                    else
+                    {
+                        MessageBox.Show(this,
+                            $"Credentials successfully imported!\n\nProject ID: {projectInfo}\nClient ID: {previewCid}\nClient Secret: {secretStatus}",
+                            "ClipSync - Credentials Imported",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+                    }
                 }
                 else
                 {

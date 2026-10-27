@@ -589,8 +589,22 @@ public struct MenuBarView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let proj = appState.googleDrive.projectId {
+                            Text("Project: \(proj)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        if let prefix = appState.googleDrive.clientIdPrefix {
+                            Text("Client ID: \(prefix)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 }
             }
+
             .padding(12)
         }
     }

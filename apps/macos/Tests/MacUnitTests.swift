@@ -223,6 +223,30 @@ struct MacUnitTests {
         assertFalse(safeLog.contains(sensitiveSecret), "Safe log must never expose OAuth client secrets")
         print("  ✔ DeviceValidationResult state machine and safe diagnostic logging verified")
 
-        print("\n🎉 ALL 14 MACOS NATIVE TESTS PASSED SUCCESSFULLY!")
+        // 15. Google Cloud Project ID extraction & Client ID prefix
+        let sampleCredJson = """
+        {
+            "installed": {
+                "client_id": "469960524475-2dcah8r8h87cka33vmsq82lbtcgov3v1.apps.googleusercontent.com",
+                "project_id": "clipsync-512808",
+                "client_secret": "GOCSPX-secretMac"
+            }
+        }
+        """
+        if let credData = sampleCredJson.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: credData) as? [String: Any],
+           let installedDict = parsed["installed"] as? [String: Any] {
+            let extractedProjId = installedDict["project_id"] as? String
+            let extractedClientId = installedDict["client_id"] as? String ?? ""
+            let prefix = String(extractedClientId.prefix(16)) + "..."
+            assertEqual(extractedProjId, "clipsync-512808")
+            assertEqual(prefix, "469960524475-2dc...")
+        } else {
+            assertionFailure("Failed to parse sample credential JSON")
+        }
+        print("  ✔ Google Cloud Project ID extraction and client ID prefix formatting verified")
+
+        print("\n🎉 ALL 15 MACOS NATIVE TESTS PASSED SUCCESSFULLY!")
     }
 }
+

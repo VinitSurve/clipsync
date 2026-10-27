@@ -72,7 +72,21 @@ public sealed class GoogleDriveService
 
     public bool HasClientSecret => !string.IsNullOrWhiteSpace(ClientSecret);
 
-    public (string? ClientId, string? ClientSecret) ImportCredentialsFile(string path)
+
+    public string? ProjectId => _tokenStorage.GetToken("google_project_id");
+
+
+
+    public string? ClientIdPrefix
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(ClientId)) return null;
+            return ClientId.Length > 16 ? ClientId[..16] + "..." : ClientId;
+        }
+    }
+
+    public (string? ClientId, string? ClientSecret, string? ProjectId) ImportCredentialsFile(string path)
     {
         var result = _tokenStorage.AutoImportCredentialsJson(path);
         if (!string.IsNullOrEmpty(result.ClientId))
@@ -92,8 +106,13 @@ public sealed class GoogleDriveService
         _tokenStorage = tokenStorage ?? new SecureTokenStorage();
         _httpClient = httpClient ?? new HttpClient();
 
-        // Check if credentials.json is present in LocalAppData
-        _tokenStorage.AutoImportCredentialsJson();
+        // Check for existing credentials or auto-discover if not set or mismatched
+        string? storedProjectId = _tokenStorage.GetToken("google_project_id");
+        if (string.IsNullOrEmpty(_tokenStorage.GetToken("google_client_id")) ||
+            (!string.IsNullOrEmpty(storedProjectId) && !storedProjectId.Contains("clipsync", StringComparison.OrdinalIgnoreCase)))
+        {
+            _tokenStorage.AutoImportCredentialsJson();
+        }
 
         // Check for existing refresh token
         string? refreshToken = _tokenStorage.GetToken("google_refresh_token");
@@ -107,6 +126,7 @@ public sealed class GoogleDriveService
             Status = GoogleDriveAuthStatus.Disconnected;
         }
     }
+
 
     // -------------------------------------------------------------------------
     // OAuth 2.0 PKCE Flow via Local Loopback
@@ -444,6 +464,7 @@ public sealed class GoogleDriveService
     {
         _tokenStorage.DeleteToken("google_refresh_token");
         _tokenStorage.DeleteToken("google_account_email");
+        _tokenStorage.DeleteToken("google_project_id");
         _accessToken = null;
         _accessTokenExpiresAt = null;
         AccountEmail = null;

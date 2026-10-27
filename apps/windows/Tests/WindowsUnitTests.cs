@@ -230,28 +230,33 @@ public static class WindowsUnitTests
                 ""installed"": {
                     ""client_id"": ""desktop-123.apps.googleusercontent.com"",
                     ""client_secret"": ""GOCSPX-secret123"",
+                    ""project_id"": ""clipsync-512808"",
                     ""redirect_uris"": [""http://localhost""]
                 }
             }";
             string installedFile = Path.Combine(tempCredsDir, "credentials.json");
             File.WriteAllText(installedFile, installedJson);
-            var (cId1, cSec1) = testStorage.AutoImportCredentialsJson(installedFile);
+            var (cId1, cSec1, proj1) = testStorage.AutoImportCredentialsJson(installedFile);
             AssertEqual("desktop-123.apps.googleusercontent.com", cId1);
             AssertEqual("GOCSPX-secret123", cSec1);
+            AssertEqual("clipsync-512808", proj1);
             AssertEqual("GOCSPX-secret123", testStorage.GetToken("google_client_secret"));
+            AssertEqual("clipsync-512808", testStorage.GetToken("google_project_id"));
 
             // Test 14B: Web application client JSON
             string webJson = @"{
                 ""web"": {
                     ""client_id"": ""web-456.apps.googleusercontent.com"",
-                    ""client_secret"": ""GOCSPX-websecret456""
+                    ""client_secret"": ""GOCSPX-websecret456"",
+                    ""project_id"": ""clipsync-web""
                 }
             }";
             string webFile = Path.Combine(tempCredsDir, "client_secret_web.json");
             File.WriteAllText(webFile, webJson);
-            var (cId2, cSec2) = testStorage.AutoImportCredentialsJson(webFile);
+            var (cId2, cSec2, proj2) = testStorage.AutoImportCredentialsJson(webFile);
             AssertEqual("web-456.apps.googleusercontent.com", cId2);
             AssertEqual("GOCSPX-websecret456", cSec2);
+            AssertEqual("clipsync-web", proj2);
 
             // Test 14C: Flat client JSON
             string flatJson = @"{
@@ -260,7 +265,7 @@ public static class WindowsUnitTests
             }";
             string flatFile = Path.Combine(tempCredsDir, "flat.json");
             File.WriteAllText(flatFile, flatJson);
-            var (cId3, cSec3) = testStorage.AutoImportCredentialsJson(flatFile);
+            var (cId3, cSec3, proj3) = testStorage.AutoImportCredentialsJson(flatFile);
             AssertEqual("flat-789.apps.googleusercontent.com", cId3);
             AssertEqual("GOCSPX-flat789", cSec3);
 
@@ -270,6 +275,7 @@ public static class WindowsUnitTests
         {
             try { Directory.Delete(tempCredsDir, true); } catch { }
         }
+
 
         // 15. Google OAuth Token Exchange Payload Validation
         string testCode = "4/0AeanS0abcdef";
@@ -409,8 +415,60 @@ public static class WindowsUnitTests
         AssertEqual("678 KB", TransferRecord.FormatByteCount(694272));
         Console.WriteLine("  [PASS] Transfer size formatting and precision verified");
 
+        // 23. Google Cloud Project Isolation & Foreign Project Auto-Discovery Rejection
+        AssertTrue(TransferHelpers.IsValidClipSyncProject("clipsync-512808"), "clipsync-512808 must be valid");
+        AssertTrue(TransferHelpers.IsValidClipSyncProject("clipsync-desktop-app"), "any project containing clipsync must be valid");
+        AssertTrue(!TransferHelpers.IsValidClipSyncProject("homevault-511916"), "homevault-511916 must be rejected as foreign project");
+        AssertTrue(TransferHelpers.IsValidClipSyncProject(null), "null project ID must pass for legacy compatibility");
+
+        string mismatchWarning = TransferHelpers.FormatProjectMismatchWarning("homevault-511916");
+        AssertTrue(mismatchWarning.Contains("homevault-511916"), "Warning must mention mismatched project");
+        AssertTrue(mismatchWarning.Contains("clipsync"), "Warning must mention expected clipsync project");
+
+        string isolationTempDir = Path.Combine(Path.GetTempPath(), "clipsync-isolation-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(isolationTempDir);
+            var isolationStorage = new SecureTokenStorage(isolationTempDir);
+
+            // Place foreign project credentials in directory
+            string foreignJson = @"{
+                ""installed"": {
+                    ""client_id"": ""817882429803-foreign.apps.googleusercontent.com"",
+                    ""client_secret"": ""GOCSPX-foreign"",
+                    ""project_id"": ""homevault-511916""
+                }
+            }";
+            File.WriteAllText(Path.Combine(isolationTempDir, "credentials.json"), foreignJson);
+
+            // Auto-discovery without customPath MUST skip foreign project
+            var (foreignCid, _, _) = isolationStorage.AutoImportCredentialsJson();
+            AssertTrue(foreignCid == null, "Auto-discovery must reject credentials from foreign project (homevault)");
+
+            // Now place valid ClipSync project credentials in credentials_clipsync.json
+            string validClipSyncJson = @"{
+                ""installed"": {
+                    ""client_id"": ""469960524475-clipsync.apps.googleusercontent.com"",
+                    ""client_secret"": ""GOCSPX-validClipSync"",
+                    ""project_id"": ""clipsync-512808""
+                }
+            }";
+            File.WriteAllText(Path.Combine(isolationTempDir, "credentials_clipsync.json"), validClipSyncJson);
+
+            var (validCid, validSec, validProj) = isolationStorage.AutoImportCredentialsJson();
+            AssertEqual("469960524475-clipsync.apps.googleusercontent.com", validCid);
+            AssertEqual("GOCSPX-validClipSync", validSec);
+            AssertEqual("clipsync-512808", validProj);
+        }
+        finally
+        {
+            try { Directory.Delete(isolationTempDir, true); } catch { }
+        }
+        Console.WriteLine("  [PASS] Google Cloud Project isolation and foreign credential auto-discovery rejection verified");
+
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("\n[SUCCESS] ALL 22 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
+        Console.WriteLine("\n[SUCCESS] ALL 23 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
         Console.ResetColor();
     }
 }
+
