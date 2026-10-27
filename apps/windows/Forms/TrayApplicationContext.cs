@@ -2,10 +2,12 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 using ClipSync.Windows.Crypto;
 using ClipSync.Windows.Models;
 using ClipSync.Windows.Services;
@@ -25,10 +27,13 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private string _serverUrl = "https://clipsync-server-cloudflare.survevinit56.workers.dev";
     private string _syncPassphrase = "clipsync-master-sync-passphrase";
+    private string _deviceLabel = "Windows 10 PC";
     private string _deviceId = "";
     private string _token = "";
     private string _syncSalt = "";
     private bool _launchAtStartup = true;
+    private string _connectionState = "Disconnected";
+    private string _lastStatusDetail = "Ready";
 
     private static string ConfigPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ClipSync", "config.json");
@@ -54,7 +59,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _clipboardMonitor = new ClipboardMonitor();
         _clipboardMonitor.Show();
-        _clipboardMonitor.Hide(); // Runs message loop
+        _clipboardMonitor.Hide(); // Message loop window
 
         _historyForm = new HistoryForm(text => _clipboardMonitor.SetRemoteClipboard(text));
 
@@ -64,10 +69,16 @@ public sealed class TrayApplicationContext : ApplicationContext
         var contextMenu = new ContextMenuStrip();
         contextMenu.Items.Add(_statusMenuItem);
         contextMenu.Items.Add(new ToolStripSeparator());
-        contextMenu.Items.Add(_pauseMenuItem);
-        contextMenu.Items.Add("Clipboard History", null, (_, _) => ShowHistory());
-        contextMenu.Items.Add("Pair New Device...", null, (_, _) => ShowPairing());
+
+        var openHistoryItem = new ToolStripMenuItem("Open Clipboard History", null, (_, _) => ShowHistory())
+        {
+            Font = new Font(contextMenu.Font, FontStyle.Bold)
+        };
+        contextMenu.Items.Add(openHistoryItem);
         contextMenu.Items.Add("Settings...", null, (_, _) => ShowSettings());
+        contextMenu.Items.Add("Reconnect", null, (_, _) => _ = ReconnectAsync("Manual reconnect requested"));
+        contextMenu.Items.Add(_pauseMenuItem);
+        contextMenu.Items.Add("Pair New Device...", null, (_, _) => ShowPairing());
         contextMenu.Items.Add(new ToolStripSeparator());
         contextMenu.Items.Add("Exit ClipSync", null, (_, _) => ExitApp());
 
@@ -100,7 +111,68 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _clipboardMonitor.OnNewLocalCopy += OnNewLocalCopy;
 
+        // Register power & network change listeners for automatic background reconnection
+        RegisterSystemEventListeners();
+
         _ = BootstrapOrPairAsync();
+    }
+
+    private void RegisterSystemEventListeners()
+    {
+        try
+        {
+            SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+            NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+        }
+        catch
+        {
+            // Event registration fallback
+        }
+    }
+
+    private void UnregisterSystemEventListeners()
+    {
+        try
+        {
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+            NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+        }
+        catch {}
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == PowerModes.Resume)
+        {
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2000); // Allow network interface to associate after sleep
+                await ReconnectAsync("Resumed from sleep");
+            });
+        }
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        if (e.IsAvailable)
+        {
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(1000);
+                await ReconnectAsync("Network interface online");
+            });
+        }
+    }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(1000);
+            await ReconnectAsync("Network route updated");
+        });
     }
 
     private void LoadConfig()
@@ -118,6 +190,9 @@ public sealed class TrayApplicationContext : ApplicationContext
 
                 if (root.TryGetProperty("syncPassphrase", out var passEl) && !string.IsNullOrWhiteSpace(passEl.GetString()))
                     _syncPassphrase = passEl.GetString()!;
+
+                if (root.TryGetProperty("deviceLabel", out var labelEl) && !string.IsNullOrWhiteSpace(labelEl.GetString()))
+                    _deviceLabel = labelEl.GetString()!;
 
                 if (root.TryGetProperty("deviceId", out var devEl))
                     _deviceId = devEl.GetString() ?? "";
@@ -149,6 +224,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             {
                 serverUrl = _serverUrl,
                 syncPassphrase = _syncPassphrase,
+                deviceLabel = _deviceLabel,
                 deviceId = _deviceId,
                 token = _token,
                 syncSalt = _syncSalt,
@@ -164,7 +240,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
             return key?.GetValue("ClipSync") != null;
         }
         catch
@@ -177,7 +253,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
             if (key != null)
             {
                 if (enable)
@@ -194,17 +270,47 @@ public sealed class TrayApplicationContext : ApplicationContext
         catch {}
     }
 
+    public async Task ReconnectAsync(string reason = "")
+    {
+        try
+        {
+            _connectionState = "Connecting...";
+            _lastStatusDetail = string.IsNullOrEmpty(reason) ? "Reconnecting..." : reason;
+            UpdateTrayStatus();
+
+            _syncService?.Stop();
+            await BootstrapOrPairAsync();
+        }
+        catch (Exception ex)
+        {
+            _connectionState = "Disconnected";
+            _lastStatusDetail = $"Reconnect failed: {ex.Message}";
+            UpdateTrayStatus();
+        }
+    }
+
+    private void UpdateTrayStatus()
+    {
+        _statusMenuItem.Text = $"Status: {_connectionState}";
+
+        string tipText = $"ClipSync — {_connectionState}";
+        if (tipText.Length > 63) tipText = tipText[..63];
+        _notifyIcon.Text = tipText;
+    }
+
     private async Task BootstrapOrPairAsync()
     {
         try
         {
-            _statusMenuItem.Text = "Status: Connecting...";
-            _notifyIcon.Text = "ClipSync — Connecting...";
+            _connectionState = "Connecting...";
+            _lastStatusDetail = "Validating connection to server...";
+            UpdateTrayStatus();
 
-            // Check if we already have valid credentials
+            // 1. Check if we already have valid credentials on this server
             if (!string.IsNullOrEmpty(_token))
             {
                 using var testHttp = new HttpClient();
+                testHttp.Timeout = TimeSpan.FromSeconds(10);
                 testHttp.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
                 try
                 {
@@ -214,15 +320,38 @@ public sealed class TrayApplicationContext : ApplicationContext
                         InitializeSync(_deviceId, _token, _syncSalt);
                         return;
                     }
+                    else if (testRes.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                    {
+                        // Token was revoked or invalid on server; clear and re-register
+                        _token = "";
+                        _deviceId = "";
+                        _syncSalt = "";
+                        SaveConfig();
+                    }
+                    else
+                    {
+                        _connectionState = "Disconnected";
+                        _lastStatusDetail = $"Server returned HTTP {(int)testRes.StatusCode}";
+                        UpdateTrayStatus();
+                        return;
+                    }
                 }
-                catch {}
+                catch (Exception ex)
+                {
+                    // Network timeout or unreachable: keep token and report status without wiping credentials
+                    _connectionState = "Disconnected";
+                    _lastStatusDetail = $"Server unreachable: {ex.Message}";
+                    UpdateTrayStatus();
+                    return;
+                }
             }
 
-            // Register Windows client
+            // 2. Register Windows client if no token present
             using var http = new HttpClient();
+            http.Timeout = TimeSpan.FromSeconds(10);
             var payload = new
             {
-                label = "Windows 10 PC",
+                label = string.IsNullOrWhiteSpace(_deviceLabel) ? "Windows 10 PC" : _deviceLabel,
                 platform = "windows"
             };
             string json = JsonSerializer.Serialize(payload);
@@ -235,18 +364,23 @@ public sealed class TrayApplicationContext : ApplicationContext
                 var dev = JsonSerializer.Deserialize<RegisterDeviceResponse>(body);
                 if (dev != null)
                 {
+                    _deviceLabel = dev.Label;
                     InitializeSync(dev.DeviceId, dev.Token, dev.SyncSalt);
                     SaveConfig();
                 }
             }
             else
             {
-                _statusMenuItem.Text = $"Status: Error (HTTP {res.StatusCode})";
+                _connectionState = "Disconnected";
+                _lastStatusDetail = $"Registration failed (HTTP {(int)res.StatusCode})";
+                UpdateTrayStatus();
             }
         }
         catch (Exception ex)
         {
-            _statusMenuItem.Text = $"Status: Error ({ex.Message})";
+            _connectionState = "Disconnected";
+            _lastStatusDetail = $"Connection error: {ex.Message}";
+            UpdateTrayStatus();
         }
     }
 
@@ -261,8 +395,14 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _syncService.OnStateChanged += state =>
         {
-            _statusMenuItem.Text = $"Status: {state}";
-            _notifyIcon.Text = $"ClipSync — {state}";
+            _connectionState = state;
+            _lastStatusDetail = state == "Connected" ? "Connected to ClipSync" : state;
+            UpdateTrayStatus();
+        };
+
+        _syncService.OnStatusMessage += msg =>
+        {
+            _lastStatusDetail = msg;
         };
 
         _syncService.OnRemoteItemReceived += (item, text) =>
@@ -284,14 +424,16 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private void TogglePause()
+    private bool TogglePause()
     {
         bool isPaused = !_clipboardMonitor.IsPaused;
         _clipboardMonitor.IsPaused = isPaused;
         if (_syncService != null) _syncService.IsPaused = isPaused;
 
         _pauseMenuItem.Text = isPaused ? "Resume Sync" : "Pause Sync";
-        _statusMenuItem.Text = isPaused ? "Status: Paused" : "Status: Connected";
+        _connectionState = isPaused ? "Paused" : (_syncService?.IsConnected == true ? "Connected" : "Disconnected");
+        UpdateTrayStatus();
+        return isPaused;
     }
 
     private void ShowHistory()
@@ -308,6 +450,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var pairingForm = new PairingForm(_serverUrl, claimed =>
         {
             _serverUrl = pairingForm.ServerUrl;
+            _deviceLabel = claimed.Label;
             _syncService?.Stop();
             InitializeSync(claimed.DeviceId, claimed.Token, claimed.SyncSalt);
             SaveConfig();
@@ -317,32 +460,58 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ShowSettings()
     {
-        var settingsForm = new SettingsForm(_serverUrl, _syncPassphrase, IsStartupEnabled(), (newUrl, newPass, startup) =>
-        {
-            bool urlChanged = !string.Equals(_serverUrl, newUrl, StringComparison.OrdinalIgnoreCase);
-
-            _serverUrl = newUrl;
-            _syncPassphrase = newPass;
-            _launchAtStartup = startup;
-            SetStartup(startup);
-
-            if (urlChanged)
+        var settingsForm = new SettingsForm(
+            currentServerUrl: _serverUrl,
+            currentPassphrase: _syncPassphrase,
+            currentDeviceLabel: _deviceLabel,
+            currentDeviceId: _deviceId,
+            currentToken: _token,
+            currentConnectionState: _connectionState,
+            lastStatusDetail: _lastStatusDetail,
+            isStartupEnabled: IsStartupEnabled(),
+            isPaused: _clipboardMonitor.IsPaused,
+            onSave: (newUrl, newPass, newLabel, startup) =>
             {
-                _token = "";
-                _deviceId = "";
-                _syncSalt = "";
+                bool urlChanged = !string.Equals(_serverUrl, newUrl, StringComparison.OrdinalIgnoreCase);
+
+                _serverUrl = newUrl;
+                _syncPassphrase = newPass;
+                _deviceLabel = newLabel;
+                _launchAtStartup = startup;
+                SetStartup(startup);
+
+                if (urlChanged)
+                {
+                    _token = "";
+                    _deviceId = "";
+                    _syncSalt = "";
+                }
+
+                SaveConfig();
+
+                _syncService?.Stop();
+                _ = BootstrapOrPairAsync();
+            },
+            onReconnect: () =>
+            {
+                _ = ReconnectAsync("Manual reconnect requested from Settings");
+            },
+            onTogglePause: () =>
+            {
+                return TogglePause();
+            },
+            onOpenPairing: () =>
+            {
+                ShowPairing();
             }
+        );
 
-            SaveConfig();
-
-            _syncService?.Stop();
-            _ = BootstrapOrPairAsync();
-        });
         settingsForm.ShowDialog();
     }
 
     private void ExitApp()
     {
+        UnregisterSystemEventListeners();
         _notifyIcon.Visible = false;
         _syncService?.Stop();
         _clipboardMonitor.Close();
