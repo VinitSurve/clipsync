@@ -30,6 +30,7 @@ public sealed class SettingsForm : Form
     // Google Drive controls
     private TextBox _googleClientIdTextBox = null!;
     private TextBox _googleClientSecretTextBox = null!;
+    private Label _googleSecretStatusLabel = null!;
     private Button _googleConnectButton = null!;
     private Button _googleDisconnectButton = null!;
     private Button _googleImportButton = null!;
@@ -439,7 +440,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Google Drive (Encrypted Image & File Storage)",
             Location = new Point(14, 10),
-            Size = new Size(520, 220),
+            Size = new Size(520, 245),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
 
@@ -475,7 +476,7 @@ public sealed class SettingsForm : Form
 
         var lblClientSecret = new Label
         {
-            Text = "Client Secret (Optional, Desktop App credential):",
+            Text = "Client Secret (Required for Google Desktop App):",
             Location = new Point(16, 78),
             AutoSize = true,
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular)
@@ -491,13 +492,28 @@ public sealed class SettingsForm : Form
         };
         _googleClientSecretTextBox.TextChanged += (_, _) =>
         {
-            if (_googleDrive != null) _googleDrive.ClientSecret = _googleClientSecretTextBox.Text;
+            if (_googleDrive != null)
+            {
+                _googleDrive.ClientSecret = _googleClientSecretTextBox.Text;
+                UpdateGoogleDriveUI();
+            }
+        };
+
+        _googleSecretStatusLabel = new Label
+        {
+            Text = (_googleDrive?.HasClientSecret ?? false)
+                ? "[OK] Client Secret configured (Stored securely in DPAPI)"
+                : "[Required] Client Secret missing. Paste above or click 'Import JSON...'.",
+            Location = new Point(16, 126),
+            Size = new Size(488, 18),
+            Font = new Font("Segoe UI", 8.25f, FontStyle.Regular),
+            ForeColor = (_googleDrive?.HasClientSecret ?? false) ? Color.FromArgb(16, 124, 65) : Color.FromArgb(190, 100, 0)
         };
 
         _googleConnectButton = new Button
         {
             Text = "Connect Google Drive",
-            Location = new Point(16, 135),
+            Location = new Point(16, 150),
             Size = new Size(170, 34),
             BackColor = Color.FromArgb(16, 124, 65),
             ForeColor = Color.White,
@@ -508,21 +524,46 @@ public sealed class SettingsForm : Form
         _googleConnectButton.FlatAppearance.BorderSize = 0;
         _googleConnectButton.Click += async (_, _) =>
         {
-            if (_googleDrive != null)
+            if (_googleDrive == null) return;
+
+            if (string.IsNullOrWhiteSpace(_googleDrive.ClientId))
             {
-                _googleConnectButton.Enabled = false;
-                _googleConnectButton.Text = "Connecting...";
-                await _googleDrive.StartAuthorizationAsync();
-                _googleConnectButton.Enabled = true;
-                _googleConnectButton.Text = "Connect Google Drive";
-                UpdateGoogleDriveUI();
+                MessageBox.Show(this, "Please enter your Google Client ID or click 'Import JSON...'.", "ClipSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
             }
+
+            if (!_googleDrive.HasClientSecret)
+            {
+                var dr = MessageBox.Show(this,
+                    "No Google Client Secret is configured.\n\n" +
+                    "Google Cloud Desktop App clients require both a Client ID and a Client Secret during token exchange. Without it, Google returns 'client_secret is missing'.\n\n" +
+                    "Would you like to import your Google credentials.json or client_secret_*.json now?",
+                    "Client Secret Required",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+
+                if (dr == DialogResult.Yes)
+                {
+                    ImportCredentialsJson();
+                    if (!_googleDrive.HasClientSecret)
+                    {
+                        return;
+                    }
+                }
+            }
+
+            _googleConnectButton.Enabled = false;
+            _googleConnectButton.Text = "Connecting...";
+            await _googleDrive.StartAuthorizationAsync();
+            _googleConnectButton.Enabled = true;
+            _googleConnectButton.Text = "Connect Google Drive";
+            UpdateGoogleDriveUI();
         };
 
         _googleDisconnectButton = new Button
         {
             Text = "Disconnect",
-            Location = new Point(194, 135),
+            Location = new Point(194, 150),
             Size = new Size(100, 34),
             Font = new Font("Segoe UI", 9f, FontStyle.Regular),
             Cursor = Cursors.Hand
@@ -536,8 +577,8 @@ public sealed class SettingsForm : Form
         _googleStatusLabel = new Label
         {
             Text = "Status: Disconnected",
-            Location = new Point(16, 178),
-            Size = new Size(488, 32),
+            Location = new Point(16, 192),
+            Size = new Size(488, 45),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
             ForeColor = Color.DimGray
         };
@@ -547,6 +588,7 @@ public sealed class SettingsForm : Form
         grpDrive.Controls.Add(_googleImportButton);
         grpDrive.Controls.Add(lblClientSecret);
         grpDrive.Controls.Add(_googleClientSecretTextBox);
+        grpDrive.Controls.Add(_googleSecretStatusLabel);
         grpDrive.Controls.Add(_googleConnectButton);
         grpDrive.Controls.Add(_googleDisconnectButton);
         grpDrive.Controls.Add(_googleStatusLabel);
@@ -555,7 +597,7 @@ public sealed class SettingsForm : Form
         var grpStartup = new GroupBox
         {
             Text = "Windows Startup Configuration",
-            Location = new Point(14, 240),
+            Location = new Point(14, 265),
             Size = new Size(520, 105),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
@@ -602,7 +644,7 @@ public sealed class SettingsForm : Form
         var grpAbout = new GroupBox
         {
             Text = "About ClipSync",
-            Location = new Point(14, 355),
+            Location = new Point(14, 380),
             Size = new Size(520, 160),
             Font = new Font("Segoe UI", 9.25f, FontStyle.Bold)
         };
@@ -740,6 +782,20 @@ public sealed class SettingsForm : Form
     {
         if (_googleDrive == null) return;
 
+        if (_googleSecretStatusLabel != null)
+        {
+            if (_googleDrive.HasClientSecret)
+            {
+                _googleSecretStatusLabel.Text = "[OK] Client Secret configured (Stored securely in DPAPI)";
+                _googleSecretStatusLabel.ForeColor = Color.FromArgb(16, 124, 65);
+            }
+            else
+            {
+                _googleSecretStatusLabel.Text = "[Required] Client Secret missing. Paste above or click 'Import JSON...'.";
+                _googleSecretStatusLabel.ForeColor = Color.FromArgb(190, 100, 0);
+            }
+        }
+
         switch (_googleDrive.Status)
         {
             case GoogleDriveAuthStatus.Connected:
@@ -773,26 +829,36 @@ public sealed class SettingsForm : Form
     {
         using var ofd = new OpenFileDialog
         {
-            Title = "Select Google Cloud credentials.json",
+            Title = "Select Google Cloud credentials.json or client_secret_*.json",
             Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*"
         };
 
         if (ofd.ShowDialog(this) == DialogResult.OK)
         {
-            var storage = new SecureTokenStorage();
-            var (cid, secret) = storage.AutoImportCredentialsJson(ofd.FileName);
-            if (!string.IsNullOrEmpty(cid))
+            if (_googleDrive != null)
             {
-                _googleClientIdTextBox.Text = cid;
-                if (!string.IsNullOrEmpty(secret))
+                var (cid, secret) = _googleDrive.ImportCredentialsFile(ofd.FileName);
+                if (!string.IsNullOrEmpty(cid))
                 {
-                    _googleClientSecretTextBox.Text = secret;
+                    _googleClientIdTextBox.Text = cid;
+                    if (!string.IsNullOrEmpty(secret))
+                    {
+                        _googleClientSecretTextBox.Text = secret;
+                    }
+                    UpdateGoogleDriveUI();
+
+                    string previewCid = cid.Length > 20 ? cid[..20] + "..." : cid;
+                    string secretStatus = !string.IsNullOrEmpty(secret) ? "Configured & saved to DPAPI" : "None found in file";
+                    MessageBox.Show(this,
+                        $"Credentials successfully imported!\n\nClient ID: {previewCid}\nClient Secret: {secretStatus}",
+                        "ClipSync - Credentials Imported",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
                 }
-                MessageBox.Show(this, "Credentials successfully imported!", "ClipSync", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            else
-            {
-                MessageBox.Show(this, "Could not find client_id in the selected file.", "ClipSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                else
+                {
+                    MessageBox.Show(this, "Could not find 'client_id' in the selected file.\nEnsure the file contains an 'installed' or 'web' configuration.", "ClipSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
         }
     }

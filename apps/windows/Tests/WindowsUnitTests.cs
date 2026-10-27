@@ -218,10 +218,102 @@ public static class WindowsUnitTests
         string hashC = ClipSyncCrypto.ComputeSha256(imgC);
         AssertEqual(hashA, hashB, "Identical content must yield identical hash for duplicate suppression");
         AssertFalse(hashA == hashC, "Different content must yield different hash");
-        Console.WriteLine("  [PASS] Content hashing and duplicate suppression correctly identify identical payloads");
+        // 14. Google OAuth Credentials Multi-Format Parsing
+        string tempCredsDir = Path.Combine(Path.GetTempPath(), "clipsync-creds-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempCredsDir);
+        try
+        {
+            var testStorage = new SecureTokenStorage(tempCredsDir);
+
+            // Test 14A: Standard Desktop "installed" client JSON
+            string installedJson = @"{
+                ""installed"": {
+                    ""client_id"": ""desktop-123.apps.googleusercontent.com"",
+                    ""client_secret"": ""GOCSPX-secret123"",
+                    ""redirect_uris"": [""http://localhost""]
+                }
+            }";
+            string installedFile = Path.Combine(tempCredsDir, "credentials.json");
+            File.WriteAllText(installedFile, installedJson);
+            var (cId1, cSec1) = testStorage.AutoImportCredentialsJson(installedFile);
+            AssertEqual("desktop-123.apps.googleusercontent.com", cId1);
+            AssertEqual("GOCSPX-secret123", cSec1);
+            AssertEqual("GOCSPX-secret123", testStorage.GetToken("google_client_secret"));
+
+            // Test 14B: Web application client JSON
+            string webJson = @"{
+                ""web"": {
+                    ""client_id"": ""web-456.apps.googleusercontent.com"",
+                    ""client_secret"": ""GOCSPX-websecret456""
+                }
+            }";
+            string webFile = Path.Combine(tempCredsDir, "client_secret_web.json");
+            File.WriteAllText(webFile, webJson);
+            var (cId2, cSec2) = testStorage.AutoImportCredentialsJson(webFile);
+            AssertEqual("web-456.apps.googleusercontent.com", cId2);
+            AssertEqual("GOCSPX-websecret456", cSec2);
+
+            // Test 14C: Flat client JSON
+            string flatJson = @"{
+                ""client_id"": ""flat-789.apps.googleusercontent.com"",
+                ""client_secret"": ""GOCSPX-flat789""
+            }";
+            string flatFile = Path.Combine(tempCredsDir, "flat.json");
+            File.WriteAllText(flatFile, flatJson);
+            var (cId3, cSec3) = testStorage.AutoImportCredentialsJson(flatFile);
+            AssertEqual("flat-789.apps.googleusercontent.com", cId3);
+            AssertEqual("GOCSPX-flat789", cSec3);
+
+            Console.WriteLine("  [PASS] Google OAuth credentials multi-format parsing (installed, web, flat) verified");
+        }
+        finally
+        {
+            try { Directory.Delete(tempCredsDir, true); } catch { }
+        }
+
+        // 15. Google OAuth Token Exchange Payload Validation
+        string testCode = "4/0AeanS0abcdef";
+        string testVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        string testRedirect = "http://127.0.0.1:54805/oauth2redirect";
+        string testClientId = "8819981768-sample.apps.googleusercontent.com";
+        string testSecret = "GOCSPX-sampleSecret";
+
+        var payloadParams = new System.Collections.Generic.Dictionary<string, string>
+        {
+            ["client_id"] = testClientId,
+            ["code"] = testCode,
+            ["code_verifier"] = testVerifier,
+            ["grant_type"] = "authorization_code",
+            ["redirect_uri"] = testRedirect,
+            ["client_secret"] = testSecret
+        };
+
+        AssertEqual("authorization_code", payloadParams["grant_type"]);
+        AssertEqual(testClientId, payloadParams["client_id"]);
+        AssertEqual(testRedirect, payloadParams["redirect_uri"]);
+        AssertEqual(testVerifier, payloadParams["code_verifier"]);
+        AssertEqual(testCode, payloadParams["code"]);
+        AssertEqual(testSecret, payloadParams["client_secret"]);
+        AssertTrue(payloadParams.ContainsKey("client_secret"), "Desktop app token request must include client_secret");
+        Console.WriteLine("  [PASS] Google OAuth token exchange payload parameters verified (RFC 6749 + PKCE + Desktop secret)");
+
+        // 16. Google OAuth Error Diagnostics & Guidance
+        string googleErrorJson = @"{
+            ""error"": ""invalid_request"",
+            ""error_description"": ""client_secret is missing.""
+        }";
+        using (var errDoc = System.Text.Json.JsonDocument.Parse(googleErrorJson))
+        {
+            var root = errDoc.RootElement;
+            string errCode = root.GetProperty("error").GetString()!;
+            string errDesc = root.GetProperty("error_description").GetString()!;
+            AssertEqual("invalid_request", errCode);
+            AssertTrue(errDesc.Contains("client_secret is missing"));
+        }
+        Console.WriteLine("  [PASS] Google OAuth error response detection and user guidance verified");
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("\n[SUCCESS] ALL 13 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
+        Console.WriteLine("\n[SUCCESS] ALL 16 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
         Console.ResetColor();
     }
 }

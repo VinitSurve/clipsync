@@ -70,6 +70,23 @@ public sealed class GoogleDriveService
         }
     }
 
+    public bool HasClientSecret => !string.IsNullOrWhiteSpace(ClientSecret);
+
+    public (string? ClientId, string? ClientSecret) ImportCredentialsFile(string path)
+    {
+        var result = _tokenStorage.AutoImportCredentialsJson(path);
+        if (!string.IsNullOrEmpty(result.ClientId))
+        {
+            ClientId = result.ClientId;
+        }
+        if (!string.IsNullOrEmpty(result.ClientSecret))
+        {
+            ClientSecret = result.ClientSecret;
+        }
+        OnAuthStatusChanged?.Invoke();
+        return result;
+    }
+
     public GoogleDriveService(SecureTokenStorage? tokenStorage = null, HttpClient? httpClient = null)
     {
         _tokenStorage = tokenStorage ?? new SecureTokenStorage();
@@ -117,6 +134,8 @@ public sealed class GoogleDriveService
             int port = GetRandomUnusedPort();
             string redirectUri = $"http://127.0.0.1:{port}/oauth2redirect";
             string listenerPrefix = $"http://127.0.0.1:{port}/oauth2redirect/";
+
+            LogOAuthDiagnostic("StartAuthorization", $"ClientId configured: {!string.IsNullOrWhiteSpace(clientId)}, HasClientSecret: {HasClientSecret}, Port: {port}");
 
             listener = new HttpListener();
             listener.Prefixes.Add(listenerPrefix);
@@ -251,10 +270,14 @@ public sealed class GoogleDriveService
             };
 
             string? secret = ClientSecret;
-            if (!string.IsNullOrEmpty(secret))
+            bool hasSecret = !string.IsNullOrWhiteSpace(secret);
+            if (hasSecret)
             {
-                dict["client_secret"] = secret.Trim();
+                dict["client_secret"] = secret!.Trim();
             }
+
+            string clientPrefix = cleanClientId.Length > 12 ? cleanClientId[..12] : cleanClientId;
+            LogOAuthDiagnostic("TokenExchangeAttempt", $"ClientId prefix: {clientPrefix}..., HasClientSecret: {hasSecret}, RedirectUri: {redirectUri}");
 
             using var req = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
             {
@@ -266,8 +289,10 @@ public sealed class GoogleDriveService
 
             if (!res.IsSuccessStatusCode)
             {
+                string parsedError = ParseOAuthError(json, res.StatusCode);
+                LogOAuthDiagnostic("TokenExchangeFailed", $"HTTP {(int)res.StatusCode} - {parsedError}");
                 Status = GoogleDriveAuthStatus.Error;
-                LastErrorMessage = ParseOAuthError(json, res.StatusCode);
+                LastErrorMessage = parsedError;
                 OnAuthStatusChanged?.Invoke();
                 return false;
             }
@@ -277,6 +302,7 @@ public sealed class GoogleDriveService
 
             if (!root.TryGetProperty("access_token", out var accessProp))
             {
+                LogOAuthDiagnostic("TokenExchangeFailed", "Access token property missing in Google JSON response");
                 Status = GoogleDriveAuthStatus.Error;
                 LastErrorMessage = "Access token missing in Google response.";
                 OnAuthStatusChanged?.Invoke();
@@ -287,10 +313,13 @@ public sealed class GoogleDriveService
             int expiresIn = root.TryGetProperty("expires_in", out var expProp) ? expProp.GetInt32() : 3600;
             _accessTokenExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn);
 
-            if (root.TryGetProperty("refresh_token", out var refreshProp) && !string.IsNullOrEmpty(refreshProp.GetString()))
+            bool hasRefresh = root.TryGetProperty("refresh_token", out var refreshProp) && !string.IsNullOrEmpty(refreshProp.GetString());
+            if (hasRefresh)
             {
                 _tokenStorage.SaveToken("google_refresh_token", refreshProp.GetString()!);
             }
+
+            LogOAuthDiagnostic("TokenExchangeSuccess", $"Access token received (expires in {expiresIn}s), Refresh token saved: {hasRefresh}");
 
             // Fetch user profile email
             AccountEmail = await FetchUserEmailAsync(_accessToken, ct);
@@ -629,11 +658,31 @@ public sealed class GoogleDriveService
             {
                 string err = errProp.GetString() ?? "";
                 string desc = root.TryGetProperty("error_description", out var descProp) ? descProp.GetString() ?? "" : "";
+                if (err == "invalid_request" && desc.Contains("client_secret is missing"))
+                {
+                    return "invalid_request: client_secret is missing. (Google Cloud Desktop App clients require client_secret. Paste your client secret or click 'Import JSON...' in Settings.)";
+                }
                 return $"{err}: {desc}".TrimEnd(':', ' ');
             }
         }
         catch { }
 
         return $"HTTP {statusCode}";
+    }
+
+    private void LogOAuthDiagnostic(string action, string detail)
+    {
+        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'");
+        string line = $"[{timestamp}] [OAuth] {action}: {detail}";
+        Console.WriteLine(line);
+
+        try
+        {
+            string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipSync");
+            Directory.CreateDirectory(logDir);
+            string logPath = Path.Combine(logDir, "oauth_diagnostics.log");
+            File.AppendAllText(logPath, line + Environment.NewLine);
+        }
+        catch { }
     }
 }
