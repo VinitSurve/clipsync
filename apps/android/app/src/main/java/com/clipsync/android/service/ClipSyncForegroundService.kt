@@ -562,13 +562,6 @@ class ClipSyncForegroundService : Service() {
     }
 
     private fun buildNotification(contentText: String): Notification {
-        val openAppIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
         val syncIntent = Intent(this, ClipSyncCaptureActivity::class.java).apply {
             action = ClipSyncCaptureActivity.ACTION_SYNC_TO_MAC
             putExtra(ClipSyncCaptureActivity.EXTRA_SOURCE, "foreground_notification")
@@ -581,10 +574,10 @@ class ClipSyncForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ClipSync Universal Clipboard")
+            .setContentTitle("ClipSync — Tap to Sync to Mac")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_menu_agenda)
-            .setContentIntent(openAppIntent)
+            .setContentIntent(syncPendingIntent)
             .addAction(android.R.drawable.ic_menu_send, "Sync to Mac", syncPendingIntent)
             .setOngoing(true)
             .build()
