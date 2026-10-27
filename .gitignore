@@ -10,6 +10,9 @@ node_modules/
 *.key
 *.cert
 *.p12
+client_secret_*.json
+credentials*.json
+
 
 # Runtime & local data
 .clipsync-store*.json
