@@ -6,6 +6,7 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.annotation.RequiresApi
+import com.clipsync.android.service.ClipboardStateManager
 import com.clipsync.android.ui.ClipSyncCaptureActivity
 
 @RequiresApi(Build.VERSION_CODES.N)
@@ -15,7 +16,20 @@ class ClipSyncTileService : TileService() {
         super.onStartListening()
         val tile = qsTile ?: return
         tile.state = Tile.STATE_ACTIVE
-        tile.label = "Sync Clipboard"
+
+        val pending = ClipboardStateManager.pendingRemoteText
+        if (!pending.isNullOrBlank()) {
+            val src = ClipboardStateManager.pendingRemoteSource ?: "Desktop"
+            tile.label = "Apply $src Clip"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                tile.subtitle = "${pending.take(15)}..."
+            }
+        } else {
+            tile.label = "Sync Clipboard"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                tile.subtitle = "Capture & Sync"
+            }
+        }
         tile.updateTile()
     }
 

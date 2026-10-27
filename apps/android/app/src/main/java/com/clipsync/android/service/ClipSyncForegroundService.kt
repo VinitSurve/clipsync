@@ -9,6 +9,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -36,6 +38,7 @@ import java.util.concurrent.TimeUnit
 class ClipSyncForegroundService : Service() {
 
     private lateinit var clipboardManager: ClipboardManager
+    private lateinit var connectivityManager: ConnectivityManager
     private lateinit var secureStorage: SecureStorage
     private lateinit var okHttpClient: OkHttpClient
 
@@ -44,25 +47,48 @@ class ClipSyncForegroundService : Service() {
     private val gson = Gson()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private var lastReceivedHash: String = ""
-    private var lastSentHash: String = ""
     private val seenItemIds = LinkedHashSet<String>()
     private var reconnectAttempt = 0
     private var isExplicitlyStopped = false
+    private var currentConnectionState = STATE_DISCONNECTED
 
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         onClipboardChanged()
+    }
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            Log.i(TAG, "Network interface active")
+            if (!isExplicitlyStopped && secureStorage.hasCredentials() && (webSocket == null || currentConnectionState != STATE_CONNECTED)) {
+                mainHandler.post {
+                    reconnectAttempt = 0
+                    connectWebSocket()
+                }
+            }
+        }
+
+        override fun onLost(network: Network) {
+            Log.w(TAG, "Network interface lost")
+            broadcastConnectionState(STATE_DISCONNECTED, "Network offline")
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
         secureStorage = SecureStorage(this)
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
         try {
             clipboardManager.addPrimaryClipChangedListener(clipListener)
         } catch (e: Exception) {
-            Log.w(TAG, "Could not add clip listener: ${e.message}")
+            Log.w(TAG, "Could not add background clip listener: ${e.message}")
+        }
+
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not register default network callback: ${e.message}")
         }
 
         okHttpClient = OkHttpClient.Builder()
@@ -163,7 +189,7 @@ class ClipSyncForegroundService : Service() {
 
     private fun scheduleReconnect() {
         if (isExplicitlyStopped) return
-        val delaySec = (1L shl reconnectAttempt.coerceAtMost(5)).coerceIn(2L, 30L)
+        val delaySec = ClipboardStateManager.calculateBackoffSeconds(reconnectAttempt)
         reconnectAttempt++
         Log.i(TAG, "Scheduling reconnect in ${delaySec}s (attempt #$reconnectAttempt)")
         mainHandler.postDelayed({
@@ -222,23 +248,26 @@ class ClipSyncForegroundService : Service() {
                     return
                 }
 
-                // Echo check against last locally sent text
-                if (computedHash == lastSentHash) {
+                // Check echo against what we just sent
+                if (computedHash == ClipboardStateManager.lastSentHash) {
                     return
                 }
-                lastReceivedHash = computedHash
 
                 val sourceApp = itemObj.getAsJsonObject("metadata")?.get("sourceApp")?.asString ?: "Remote Device"
 
-                // 5. Try applying directly if OS permits (in foreground or accessible)
+                // 5. Mark received in shared state
+                ClipboardStateManager.markReceived(decrypted, sourceApp, System.currentTimeMillis())
+
+                // 6. Try applying directly if OS permits (in foreground or accessible)
                 try {
                     val clip = ClipData.newPlainText("ClipSync", decrypted)
                     clipboardManager.setPrimaryClip(clip)
+                    ClipboardStateManager.markAppliedLocally(decrypted)
                 } catch (e: Exception) {
-                    Log.d(TAG, "Background clipboard write restricted: ${e.message}")
+                    Log.d(TAG, "Direct background clipboard write restricted by OS: ${e.message}")
                 }
 
-                // 6. Broadcast to UI to add to history list
+                // 7. Broadcast to UI so MainActivity can add to history AND auto-apply if foregrounded
                 val broadcast = Intent(ACTION_ITEM_RECEIVED).apply {
                     putExtra("text", decrypted)
                     putExtra("sourceApp", sourceApp)
@@ -247,7 +276,7 @@ class ClipSyncForegroundService : Service() {
                 }
                 sendBroadcast(broadcast)
 
-                // 7. Update notification with 1-tap Copy action
+                // 8. Update notification with 1-tap Copy action
                 val preview = if (decrypted.length > 35) decrypted.take(35) + "..." else decrypted
                 updateNotificationWithAction(
                     title = "Received from $sourceApp",
@@ -269,10 +298,10 @@ class ClipSyncForegroundService : Service() {
                 val text = clip.getItemAt(0).text?.toString()
                 if (!text.isNullOrBlank()) {
                     val hash = ClipSyncCrypto.sha256(text)
-                    if (hash == lastReceivedHash) return // Ignore echo from remote
-                    if (hash == lastSentHash) return     // Ignore duplicate local
+                    if (ClipboardStateManager.isEcho(hash)) return
+                    if (ClipboardStateManager.isAlreadySynced(hash)) return
 
-                    lastSentHash = hash
+                    ClipboardStateManager.markSent(text)
                     broadcastText(text, isManual = false)
                 }
             }
@@ -287,8 +316,7 @@ class ClipSyncForegroundService : Service() {
         val ws = webSocket ?: return
 
         try {
-            val hash = ClipSyncCrypto.sha256(text)
-            lastSentHash = hash
+            val hash = ClipboardStateManager.markSent(text)
 
             val envelope = safeCrypto.encrypt(text)
             val envelopeJson = gson.toJson(envelope)
@@ -341,6 +369,7 @@ class ClipSyncForegroundService : Service() {
     }
 
     private fun broadcastConnectionState(state: String, error: String? = null) {
+        currentConnectionState = state
         val intent = Intent(ACTION_CONNECTION_STATE).apply {
             putExtra("state", state)
             if (error != null) putExtra("error", error)
@@ -367,7 +396,7 @@ class ClipSyncForegroundService : Service() {
             this,
             0,
             Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         val syncIntent = Intent(this, ClipSyncCaptureActivity::class.java).apply {
@@ -377,7 +406,7 @@ class ClipSyncForegroundService : Service() {
             this,
             1,
             syncIntent,
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -397,7 +426,7 @@ class ClipSyncForegroundService : Service() {
 
     private fun updateNotificationWithAction(title: String, text: String, fullTextToCopy: String) {
         val openAppIntent = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         val copyIntent = Intent(this, ClipSyncCaptureActivity::class.java).apply {
@@ -425,6 +454,9 @@ class ClipSyncForegroundService : Service() {
         isExplicitlyStopped = true
         try {
             clipboardManager.removePrimaryClipChangedListener(clipListener)
+        } catch (_: Exception) {}
+        try {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
         } catch (_: Exception) {}
         webSocket?.close(1000, "Service stopped")
         broadcastConnectionState(STATE_DISCONNECTED)

@@ -34,10 +34,17 @@
 
         <activity
             android:name=".ui.ClipSyncCaptureActivity"
+            android:label="Sync with ClipSync"
             android:theme="@style/Theme.ClipSync.Transparent"
             android:excludeFromRecents="true"
             android:noHistory="true"
-            android:exported="true" />
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".service.ClipSyncForegroundService"

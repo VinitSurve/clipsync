@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -22,11 +23,13 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.clipsync.android.R
+import com.clipsync.android.crypto.ClipSyncCrypto
 import com.clipsync.android.models.ClaimPairingResponse
 import com.clipsync.android.models.DeviceInfo
 import com.clipsync.android.models.DeviceListResponse
 import com.clipsync.android.models.PairingSessionResponse
 import com.clipsync.android.service.ClipSyncForegroundService
+import com.clipsync.android.service.ClipboardStateManager
 import com.clipsync.android.storage.SecureStorage
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
@@ -74,6 +77,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtStatusTitle: TextView
     private lateinit var txtDeviceLabel: TextView
     private lateinit var txtServerUrl: TextView
+    private lateinit var txtSyncMode: TextView
     private lateinit var btnToggleConnect: MaterialButton
     private lateinit var btnSyncNow: MaterialButton
     private lateinit var btnPair: MaterialButton
@@ -103,6 +107,23 @@ class MainActivity : AppCompatActivity() {
 
                     runOnUiThread {
                         addHistoryEntry(HistoryEntry(id, text, source, timestamp))
+
+                        // When MainActivity is foregrounded with window focus, auto-apply immediately
+                        if (hasWindowFocus() || ClipboardStateManager.isAppInForeground) {
+                            try {
+                                ClipboardStateManager.markAppliedLocally(text)
+                                val clip = ClipData.newPlainText("ClipSync", text)
+                                clipboardManager.setPrimaryClip(clip)
+                                val preview = if (text.length > 25) text.take(25) + "..." else text
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "ClipSync: Auto-applied from $source (\"$preview\")",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } catch (e: Exception) {
+                                Log.d("MainActivity", "Foreground auto-apply failed: ${e.message}")
+                            }
+                        }
                     }
                 }
 
@@ -157,17 +178,31 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        ClipboardStateManager.isAppInForeground = true
         try {
             clipboardManager.addPrimaryClipChangedListener(foregroundClipListener)
         } catch (_: Exception) {}
+
+        checkAndProcessClipboardOnForeground()
         refreshUIFromStorage()
         if (secureStorage.hasCredentials()) {
             fetchDevices()
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            ClipboardStateManager.isAppInForeground = true
+            checkAndProcessClipboardOnForeground()
+        } else {
+            ClipboardStateManager.isAppInForeground = false
+        }
+    }
+
     override fun onPause() {
         super.onPause()
+        ClipboardStateManager.isAppInForeground = false
         try {
             clipboardManager.removePrimaryClipChangedListener(foregroundClipListener)
         } catch (_: Exception) {}
@@ -180,11 +215,77 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    private fun checkAndProcessClipboardOnForeground() {
+        // 1. If there is a pending remote text waiting to be applied, auto-apply it immediately
+        val pending = ClipboardStateManager.pendingRemoteText
+        val pendingSource = ClipboardStateManager.pendingRemoteSource ?: "Desktop"
+        if (!pending.isNullOrBlank()) {
+            try {
+                ClipboardStateManager.markAppliedLocally(pending)
+                val clip = ClipData.newPlainText("ClipSync", pending)
+                clipboardManager.setPrimaryClip(clip)
+                val preview = if (pending.length > 25) pending.take(25) + "..." else pending
+                Toast.makeText(this, "ClipSync: Auto-applied from $pendingSource (\"$preview\")", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Log.d("MainActivity", "Auto-apply pending failed: ${e.message}")
+            }
+            return
+        }
+
+        // 2. Otherwise check if local clipboard has new text copied from another app
+        try {
+            val clip = clipboardManager.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val text = clip.getItemAt(0).text?.toString()
+                if (!text.isNullOrBlank()) {
+                    val hash = ClipSyncCrypto.sha256(text)
+                    if (!ClipboardStateManager.isEcho(hash) && !ClipboardStateManager.isAlreadySynced(hash)) {
+                        // NEW text copied in external app! Auto-sync to desktop
+                        ClipboardStateManager.markSent(text)
+                        val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                            putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
+                        }
+                        startService(intent)
+                        val preview = if (text.length > 25) text.take(25) + "..." else text
+                        Toast.makeText(this, "ClipSync: Auto-synced clipboard (\"$preview\")", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d("MainActivity", "Check primaryClip failed: ${e.message}")
+        }
+    }
+
+    private fun onForegroundClipboardChanged() {
+        try {
+            val clip = clipboardManager.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val text = clip.getItemAt(0).text?.toString()
+                if (!text.isNullOrBlank()) {
+                    val hash = ClipSyncCrypto.sha256(text)
+                    if (ClipboardStateManager.isEcho(hash) || ClipboardStateManager.isAlreadySynced(hash)) {
+                        return
+                    }
+                    ClipboardStateManager.markSent(text)
+                    val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                        putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
+                    }
+                    startService(intent)
+                    val preview = if (text.length > 25) text.take(25) + "..." else text
+                    Toast.makeText(this, "ClipSync: Auto-synced (\"$preview\")", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (e: Exception) {
+            // Foreground clip error
+        }
+    }
+
     private fun initViews() {
         viewStatusDot = findViewById(R.id.viewStatusDot)
         txtStatusTitle = findViewById(R.id.txtStatusTitle)
         txtDeviceLabel = findViewById(R.id.txtDeviceLabel)
         txtServerUrl = findViewById(R.id.txtServerUrl)
+        txtSyncMode = findViewById(R.id.txtSyncMode)
         btnToggleConnect = findViewById(R.id.btnToggleConnect)
         btnSyncNow = findViewById(R.id.btnSyncNow)
         btnPair = findViewById(R.id.btnPair)
@@ -263,6 +364,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshUIFromStorage() {
         txtDeviceLabel.text = "Device: ${secureStorage.deviceLabel}"
         txtServerUrl.text = "Server: ${secureStorage.serverUrl}"
+        txtSyncMode.text = "Sync: Auto (Foreground) • 1-Tap QS / Notification"
 
         if (!secureStorage.hasCredentials()) {
             updateConnectionUI(ClipSyncForegroundService.STATE_NOT_PAIRED, null)
@@ -307,30 +409,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun onForegroundClipboardChanged() {
-        try {
-            val clip = clipboardManager.primaryClip
-            if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).text?.toString()
-                if (!text.isNullOrBlank()) {
-                    // Send to background service
-                    val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
-                        putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
-                    }
-                    startService(intent)
-                }
-            }
-        } catch (e: Exception) {
-            // Foreground clip error
-        }
-    }
-
     private fun syncCurrentClipboard() {
         try {
             val clip = clipboardManager.primaryClip
             if (clip != null && clip.itemCount > 0) {
                 val text = clip.getItemAt(0).text?.toString()
                 if (!text.isNullOrBlank()) {
+                    ClipboardStateManager.markSent(text)
                     val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
                         putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
                     }
@@ -350,6 +435,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyToClipboard(text: String) {
         try {
+            ClipboardStateManager.markAppliedLocally(text)
             val clip = ClipData.newPlainText("ClipSync", text)
             clipboardManager.setPrimaryClip(clip)
             Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
@@ -523,7 +609,7 @@ class MainActivity : AppCompatActivity() {
         httpClient.newCall(req).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 runOnUiThread {
-                    Toast.makeText(this@MainActivity, "Pairing failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Pairing failed: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
 

@@ -101,6 +101,16 @@
                         android:textSize="12sp"
                         android:ellipsize="middle"
                         android:singleLine="true" />
+
+                    <TextView
+                        android:id="@+id/txtSyncMode"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Sync: Automatic (Foreground) • 1-Tap QS / Notification"
+                        android:textColor="@color/brand_green_dark"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
