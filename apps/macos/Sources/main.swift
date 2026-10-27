@@ -33,6 +33,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.contentViewController?.view.window?.makeKey()
         }
     }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            print("[OAuth] AppDelegate received open URL: \(url.scheme ?? "")://...")
+            GoogleDriveService.shared.handleCallbackURL(url)
+        }
+    }
 }
 
 let app = NSApplication.shared

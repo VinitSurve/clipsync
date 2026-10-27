@@ -10,6 +10,47 @@ export type SyncItemType = (typeof ITEM_TYPES)[number];
 export const DEVICE_PLATFORMS = ["macos", "windows", "android", "web", "cli"] as const;
 export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
 
+// -----------------------------------------------------------------------------
+// Large File & Image Transfer (Google Drive & P2P Direct)
+// -----------------------------------------------------------------------------
+
+export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024; // 100 MB strict limit
+export const MAX_TRANSFER_RETENTION_MS = 24 * 60 * 60 * 1000; // 24 hours strict retention
+
+export const TRANSFER_MEDIUMS = ["p2p_direct", "google_drive"] as const;
+export type TransferMedium = (typeof TRANSFER_MEDIUMS)[number];
+
+export const TRANSFER_STATUSES = [
+  "pending",
+  "uploading",
+  "ready",
+  "downloading",
+  "delivered",
+  "expired",
+  "failed",
+  "cancelled",
+] as const;
+export type TransferStatus = (typeof TRANSFER_STATUSES)[number];
+
+export interface TransferManifest {
+  version: number;
+  transferId: string; // UUID
+  senderDeviceId: string;
+  fileName: string;
+  fileSizeBytes: number; // Max 100 MB
+  mimeType: string;
+  sha256Hash: string; // Hex string (64 chars)
+  encryptionIv: string; // Base64url 12 bytes
+  encryptionTag: string; // Base64url 16 bytes
+  medium: TransferMedium;
+  storageReference?: string; // Drive fileId, URL, or local direct endpoint
+  driveFileId?: string; // Google Drive file ID if medium === "google_drive"
+  createdAt: string; // ISO 8601
+  expiresAt: string; // ISO 8601 (strictly <= createdAt + 24 hours)
+  status: TransferStatus;
+  deliveredTo?: string[]; // Device IDs that have successfully received & decrypted
+}
+
 export interface SyncItemMetadata {
   size: number;
   mimeType?: string;
@@ -80,13 +121,50 @@ export interface WsStatusMessage {
   status: "active" | "idle" | "paused";
 }
 
+export interface WsTransferInitMessage {
+  type: "transfer:init";
+  manifest: TransferManifest;
+}
+
+export interface WsTransferProgressMessage {
+  type: "transfer:progress";
+  transferId: string;
+  bytesTransferred: number;
+  totalBytes: number;
+  phase: "uploading" | "downloading";
+}
+
+export interface WsTransferAckMessage {
+  type: "transfer:ack";
+  transferId: string;
+  recipientDeviceId: string;
+}
+
+export interface WsTransferCleanupMessage {
+  type: "transfer:cleanup";
+  transferId: string;
+  driveFileId?: string;
+  reason: "delivered" | "expired" | "cancelled";
+}
+
+export interface WsTransferCancelMessage {
+  type: "transfer:cancel";
+  transferId: string;
+  reason?: string;
+}
+
 export type WsClientMessage =
   | WsAuthMessage
   | WsSyncItemMessage
   | WsAckMessage
   | WsPingMessage
   | WsHistoryRequestMessage
-  | WsStatusMessage;
+  | WsStatusMessage
+  | WsTransferInitMessage
+  | WsTransferProgressMessage
+  | WsTransferAckMessage
+  | WsTransferCleanupMessage
+  | WsTransferCancelMessage;
 
 // -----------------------------------------------------------------------------
 // WebSocket Messages (Server -> Client)
@@ -146,6 +224,43 @@ export interface WsPongMessage {
   serverTime: string;
 }
 
+export interface WsTransferAnnouncedMessage {
+  type: "transfer:announced";
+  manifest: TransferManifest;
+}
+
+export interface WsTransferProgressRelayMessage {
+  type: "transfer:progress_relay";
+  transferId: string;
+  deviceId: string;
+  bytesTransferred: number;
+  totalBytes: number;
+  phase: "uploading" | "downloading";
+}
+
+export interface WsTransferDeliveredMessage {
+  type: "transfer:delivered";
+  transferId: string;
+  recipientDeviceId: string;
+  allDelivered: boolean;
+  driveFileId?: string;
+  shouldDelete: boolean;
+}
+
+export interface WsTransferExpiredMessage {
+  type: "transfer:expired";
+  transferId: string;
+  driveFileId?: string;
+  reason: "retention_exceeded" | "missed_deadline";
+}
+
+export interface WsTransferDeletedMessage {
+  type: "transfer:deleted";
+  transferId: string;
+  driveFileId?: string;
+  reason: string;
+}
+
 export type WsServerMessage =
   | WsConnectedMessage
   | WsSyncBroadcastMessage
@@ -154,7 +269,12 @@ export type WsServerMessage =
   | WsDeviceLeftMessage
   | WsDeviceRevokedMessage
   | WsErrorMessage
-  | WsPongMessage;
+  | WsPongMessage
+  | WsTransferAnnouncedMessage
+  | WsTransferProgressRelayMessage
+  | WsTransferDeliveredMessage
+  | WsTransferExpiredMessage
+  | WsTransferDeletedMessage;
 
 // -----------------------------------------------------------------------------
 // REST API Payloads
@@ -231,6 +351,38 @@ export interface HistoryResponse {
   items: StoredSyncItem[];
   lastSequence: number;
   hasMore: boolean;
+}
+
+export interface InitTransferRequest {
+  manifest: TransferManifest;
+}
+
+export interface InitTransferResponse {
+  ok: boolean;
+  manifest: TransferManifest;
+  duplicate?: boolean;
+}
+
+export interface AckTransferRequest {
+  recipientDeviceId?: string;
+}
+
+export interface AckTransferResponse {
+  ok: boolean;
+  transferId: string;
+  allDelivered: boolean;
+  shouldDelete: boolean;
+  driveFileId?: string;
+}
+
+export interface PendingTransfersResponse {
+  transfers: TransferManifest[];
+}
+
+export interface CleanupTransferResponse {
+  ok: boolean;
+  transferId: string;
+  driveFileId?: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -320,3 +472,103 @@ export function isEncryptedEnvelope(value: unknown): value is EncryptedPayloadEn
     typeof env.tag === "string"
   );
 }
+
+export function isTransferManifest(value: unknown): value is TransferManifest {
+  if (!value || typeof value !== "object") return false;
+  const m = value as Partial<TransferManifest>;
+  return (
+    m.version === PROTOCOL_VERSION &&
+    typeof m.transferId === "string" &&
+    typeof m.senderDeviceId === "string" &&
+    typeof m.fileName === "string" &&
+    typeof m.fileSizeBytes === "number" &&
+    typeof m.mimeType === "string" &&
+    typeof m.sha256Hash === "string" &&
+    typeof m.encryptionIv === "string" &&
+    typeof m.encryptionTag === "string" &&
+    typeof m.medium === "string" &&
+    TRANSFER_MEDIUMS.includes(m.medium as TransferMedium) &&
+    typeof m.createdAt === "string" &&
+    typeof m.expiresAt === "string" &&
+    typeof m.status === "string" &&
+    TRANSFER_STATUSES.includes(m.status as TransferStatus)
+  );
+}
+
+export function validateTransferManifest(
+  value: unknown
+): { valid: true; manifest: TransferManifest } | { valid: false; error: string } {
+  if (!value || typeof value !== "object") {
+    return { valid: false, error: "TransferManifest must be a non-null object" };
+  }
+  const m = value as Partial<TransferManifest>;
+  if (m.version !== PROTOCOL_VERSION) {
+    return { valid: false, error: `Invalid protocol version: expected ${PROTOCOL_VERSION}, got ${m.version}` };
+  }
+  if (!m.transferId || typeof m.transferId !== "string") {
+    return { valid: false, error: "transferId must be a non-empty string" };
+  }
+  if (!m.senderDeviceId || typeof m.senderDeviceId !== "string") {
+    return { valid: false, error: "senderDeviceId must be a non-empty string" };
+  }
+  if (!m.fileName || typeof m.fileName !== "string") {
+    return { valid: false, error: "fileName must be a non-empty string" };
+  }
+  if (typeof m.fileSizeBytes !== "number" || m.fileSizeBytes <= 0) {
+    return { valid: false, error: "fileSizeBytes must be a positive number" };
+  }
+  if (m.fileSizeBytes > MAX_TRANSFER_BYTES) {
+    return {
+      valid: false,
+      error: `fileSizeBytes exceeds maximum limit of ${MAX_TRANSFER_BYTES} bytes (100 MB)`,
+    };
+  }
+  if (!m.mimeType || typeof m.mimeType !== "string") {
+    return { valid: false, error: "mimeType must be a non-empty string" };
+  }
+  if (!m.sha256Hash || typeof m.sha256Hash !== "string" || m.sha256Hash.length !== 64) {
+    return { valid: false, error: "sha256Hash must be a 64-character hex string" };
+  }
+  if (!m.encryptionIv || typeof m.encryptionIv !== "string") {
+    return { valid: false, error: "encryptionIv must be a non-empty string" };
+  }
+  if (!m.encryptionTag || typeof m.encryptionTag !== "string") {
+    return { valid: false, error: "encryptionTag must be a non-empty string" };
+  }
+  if (!m.medium || !TRANSFER_MEDIUMS.includes(m.medium as TransferMedium)) {
+    return { valid: false, error: `medium must be one of: ${TRANSFER_MEDIUMS.join(", ")}` };
+  }
+  if (!m.createdAt || isNaN(Date.parse(m.createdAt))) {
+    return { valid: false, error: "createdAt must be a valid ISO 8601 timestamp" };
+  }
+  if (!m.expiresAt || isNaN(Date.parse(m.expiresAt))) {
+    return { valid: false, error: "expiresAt must be a valid ISO 8601 timestamp" };
+  }
+  const createdTime = new Date(m.createdAt).getTime();
+  const expiresTime = new Date(m.expiresAt).getTime();
+  if (expiresTime <= createdTime) {
+    return { valid: false, error: "expiresAt must be in the future relative to createdAt" };
+  }
+  if (expiresTime - createdTime > MAX_TRANSFER_RETENTION_MS + 60000) {
+    // 60s tolerance for clock drift
+    return {
+      valid: false,
+      error: `expiresAt exceeds maximum retention of 24 hours (${MAX_TRANSFER_RETENTION_MS} ms)`,
+    };
+  }
+  if (!m.status || !TRANSFER_STATUSES.includes(m.status as TransferStatus)) {
+    return { valid: false, error: `status must be one of: ${TRANSFER_STATUSES.join(", ")}` };
+  }
+  return { valid: true, manifest: m as TransferManifest };
+}
+
+export function makeTransferManifest(params: Omit<TransferManifest, "version">): TransferManifest {
+  const manifest: TransferManifest = {
+    version: PROTOCOL_VERSION,
+    ...params,
+  };
+  const val = validateTransferManifest(manifest);
+  if (!val.valid) throw new TypeError(`Invalid TransferManifest: ${val.error}`);
+  return manifest;
+}
+

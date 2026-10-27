@@ -30,7 +30,19 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>com.clipsync.macos</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>com.clipsync.macos</string>
+                <string>com.googleusercontent.apps.469960524475-2dcah8r8h87cka33vmsq82lbtcgov3v1</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

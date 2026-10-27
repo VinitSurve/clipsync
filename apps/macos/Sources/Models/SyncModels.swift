@@ -121,3 +121,9 @@ public struct HistoryResponse: Codable {
     public let lastSequence: Int
     public let hasMore: Bool
 }
+
+public enum DeviceValidationResult: Equatable {
+    case valid
+    case invalidCredentials(statusCode: Int)
+    case unreachable(reason: String, elapsedMs: Int)
+}

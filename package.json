@@ -11,7 +11,8 @@
     "build": "pnpm -r run build",
     "package:mac": "./scripts/package-macos.sh",
     "install:mac": "./scripts/install-mac.sh",
-    "test": "node --test packages/*/test/*.test.js apps/server/test/*.test.js apps/server-cloudflare/test/*.test.js",
+    "test:mac": "./apps/macos/run-tests.sh",
+    "test": "node --test packages/*/test/*.test.js apps/server/test/*.test.js apps/server-cloudflare/test/*.test.js && ./apps/macos/run-tests.sh",
     "typecheck": "pnpm -r run typecheck"
   },
   "dependencies": {

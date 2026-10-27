@@ -33,6 +33,13 @@ public final class WebSocketSyncService: NSObject, URLSessionWebSocketDelegate {
     public var onRemoteItemReceived: ((SyncItem, String) -> Void)?
     public var onDeviceEvent: ((String) -> Void)?
 
+    // Transfer Callbacks
+    public var onTransferAnnounced: ((TransferManifest) -> Void)?
+    public var onTransferProgressRelay: ((String, String, Int64, Int64, String) -> Void)?
+    public var onTransferDelivered: ((String, String, Bool, String?, Bool) -> Void)?
+    public var onTransferExpired: ((String, String?) -> Void)?
+    public var onTransferDeleted: ((String, String?) -> Void)?
+
     public init(serverUrl: String, deviceId: String, token: String, crypto: ClipSyncCrypto) {
         self.serverUrl = serverUrl
         self.deviceId = deviceId
@@ -52,7 +59,10 @@ public final class WebSocketSyncService: NSObject, URLSessionWebSocketDelegate {
             .replacingOccurrences(of: "https://", with: "")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
+        print("[WebSocket] Initiating connection to \(wsScheme)://\(hostAndPort)/v1/events...")
+
         guard let url = URL(string: "\(wsScheme)://\(hostAndPort)/v1/events?token=\(token)") else {
+            print("[WebSocket] Failed to construct WebSocket URL")
             state = .disconnected
             return
         }
@@ -161,7 +171,8 @@ public final class WebSocketSyncService: NSObject, URLSessionWebSocketDelegate {
                 }
                 self.listenForMessages()
 
-            case .failure:
+            case .failure(let error):
+                print("[WebSocket] Receive error: \(error.localizedDescription)")
                 self.handleDisconnect()
             }
         }
@@ -176,6 +187,7 @@ public final class WebSocketSyncService: NSObject, URLSessionWebSocketDelegate {
 
         switch type {
         case "connected":
+            print("[WebSocket] Received 'connected' frame from server")
             self.state = isPaused ? .paused : .connected
             self.reconnectAttempts = 0
             if let seq = json["lastSequence"] as? Int {
@@ -231,8 +243,120 @@ public final class WebSocketSyncService: NSObject, URLSessionWebSocketDelegate {
         case "pong":
             break
 
+        case "transfer:announced":
+            if let manifestDict = json["manifest"] as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: manifestDict),
+               let manifest = try? JSONDecoder().decode(TransferManifest.self, from: data) {
+                onTransferAnnounced?(manifest)
+            }
+
+        case "transfer:progress_relay":
+            if let tid = json["transferId"] as? String,
+               let dev = json["deviceId"] as? String,
+               let bytes = json["bytesTransferred"] as? Int64,
+               let total = json["totalBytes"] as? Int64,
+               let phase = json["phase"] as? String {
+                onTransferProgressRelay?(tid, dev, bytes, total, phase)
+            }
+
+        case "transfer:delivered":
+            if let tid = json["transferId"] as? String,
+               let recipient = json["recipientDeviceId"] as? String,
+               let all = json["allDelivered"] as? Bool,
+               let shouldDel = json["shouldDelete"] as? Bool {
+                let driveId = json["driveFileId"] as? String
+                onTransferDelivered?(tid, recipient, all, driveId, shouldDel)
+            }
+
+        case "transfer:expired":
+            if let tid = json["transferId"] as? String {
+                let driveId = json["driveFileId"] as? String
+                onTransferExpired?(tid, driveId)
+            }
+
+        case "transfer:deleted":
+            if let tid = json["transferId"] as? String {
+                let driveId = json["driveFileId"] as? String
+                onTransferDeleted?(tid, driveId)
+            }
+
         default:
             break
+        }
+    }
+
+    public func sendTransferInit(manifest: TransferManifest) {
+        guard let webSocket = webSocketTask else { return }
+        let encoder = JSONEncoder()
+        if let manifestData = try? encoder.encode(manifest),
+           let manifestDict = try? JSONSerialization.jsonObject(with: manifestData) as? [String: Any] {
+            let msg: [String: Any] = [
+                "type": "transfer:init",
+                "manifest": manifestDict
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: msg),
+               let str = String(data: data, encoding: .utf8) {
+                webSocket.send(.string(str)) { _ in }
+            }
+        }
+    }
+
+    public func sendTransferProgress(transferId: String, bytesTransferred: Int64, totalBytes: Int64, phase: String) {
+        guard let webSocket = webSocketTask else { return }
+        let msg: [String: Any] = [
+            "type": "transfer:progress",
+            "transferId": transferId,
+            "bytesTransferred": bytesTransferred,
+            "totalBytes": totalBytes,
+            "phase": phase
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: msg),
+           let str = String(data: data, encoding: .utf8) {
+            webSocket.send(.string(str)) { _ in }
+        }
+    }
+
+    public func sendTransferAck(transferId: String) {
+        guard let webSocket = webSocketTask else { return }
+        let msg: [String: Any] = [
+            "type": "transfer:ack",
+            "transferId": transferId,
+            "recipientDeviceId": deviceId
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: msg),
+           let str = String(data: data, encoding: .utf8) {
+            webSocket.send(.string(str)) { _ in }
+        }
+    }
+
+    public func sendTransferCleanup(transferId: String, driveFileId: String?, reason: String) {
+        guard let webSocket = webSocketTask else { return }
+        var msg: [String: Any] = [
+            "type": "transfer:cleanup",
+            "transferId": transferId,
+            "reason": reason
+        ]
+        if let dfid = driveFileId {
+            msg["driveFileId"] = dfid
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: msg),
+           let str = String(data: data, encoding: .utf8) {
+            webSocket.send(.string(str)) { _ in }
+        }
+    }
+
+    public func sendTransferCancel(transferId: String, reason: String? = nil) {
+        guard let webSocket = webSocketTask else { return }
+        var msg: [String: Any] = [
+            "type": "transfer:cancel",
+            "transferId": transferId
+        ]
+        if let r = reason {
+            msg["reason"] = r
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: msg),
+           let str = String(data: data, encoding: .utf8) {
+            webSocket.send(.string(str)) { _ in }
         }
     }
 
@@ -256,6 +380,7 @@ public final class WebSocketSyncService: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func handleDisconnect() {
+        print("[WebSocket] Disconnected from server")
         state = .disconnected
         pingTimer?.invalidate()
         scheduleReconnect()
@@ -265,16 +390,27 @@ public final class WebSocketSyncService: NSObject, URLSessionWebSocketDelegate {
         reconnectTimer?.invalidate()
         let delay = min(pow(1.8, Double(reconnectAttempts)), 15.0)
         reconnectAttempts += 1
+        print("[WebSocket] Scheduling reconnect attempt #\(reconnectAttempts) in \(String(format: "%.1f", delay))s...")
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             self?.connect()
         }
     }
 
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        print("[WebSocket] Handshake succeeded (protocol: \(`protocol` ?? "default"))")
         state = isPaused ? .paused : .connected
     }
 
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "None"
+        print("[WebSocket] Connection closed (code: \(closeCode.rawValue), reason: \(reasonStr))")
         handleDisconnect()
+    }
+
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            print("[WebSocket] URLSession task error: \(error.localizedDescription)")
+            handleDisconnect()
+        }
     }
 }

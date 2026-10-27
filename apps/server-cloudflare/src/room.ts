@@ -8,7 +8,13 @@ import {
   type RegisterDeviceResponse,
   type PairingSessionResponse,
   type ClaimPairingResponse,
+  type TransferManifest,
+  type InitTransferResponse,
+  type AckTransferResponse,
+  type PendingTransfersResponse,
+  type CleanupTransferResponse,
   validateSyncItem,
+  validateTransferManifest,
   PROTOCOL_VERSION,
 } from "@clipsync/protocol";
 
@@ -56,6 +62,9 @@ export class ClipSyncRoom extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.initDatabase();
+    this.ctx.blockConcurrencyWhile(async () => {
+      await this.sweepExpiredTransfers();
+    });
   }
 
   private initDatabase(): void {
@@ -99,6 +108,28 @@ export class ClipSyncRoom extends DurableObject<Env> {
       );
 
       CREATE INDEX IF NOT EXISTS idx_items_seq ON clipboard_items(sequence_number);
+
+      CREATE TABLE IF NOT EXISTS file_transfers (
+        transfer_id TEXT PRIMARY KEY,
+        sender_device_id TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_size_bytes INTEGER NOT NULL,
+        mime_type TEXT NOT NULL,
+        sha256_hash TEXT NOT NULL,
+        encryption_iv TEXT NOT NULL,
+        encryption_tag TEXT NOT NULL,
+        medium TEXT NOT NULL,
+        storage_reference TEXT,
+        drive_file_id TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivered_to TEXT NOT NULL DEFAULT '[]',
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_transfers_expires ON file_transfers(expires_at, status);
+      CREATE INDEX IF NOT EXISTS idx_transfers_hash ON file_transfers(sha256_hash, status);
     `);
 
     // Ensure group syncSalt exists
@@ -109,6 +140,10 @@ export class ClipSyncRoom extends DurableObject<Env> {
       this.syncSalt = generateSalt(16);
       this.sql.exec("INSERT INTO metadata (key, value) VALUES ('sync_salt', ?)", this.syncSalt);
     }
+  }
+
+  async alarm(): Promise<void> {
+    await this.sweepExpiredTransfers();
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -158,6 +193,30 @@ export class ClipSyncRoom extends DurableObject<Env> {
 
     if (url.pathname === "/internal/sync" && request.method === "POST") {
       return this.httpSync(request);
+    }
+
+    // Transfers routes
+    if (url.pathname === "/internal/transfers/init" && request.method === "POST") {
+      return this.initTransfer(request);
+    }
+
+    if (url.pathname === "/internal/transfers/pending" && request.method === "GET") {
+      return this.getPendingTransfers(request);
+    }
+
+    if (url.pathname.startsWith("/internal/transfers/") && url.pathname.endsWith("/ack") && request.method === "POST") {
+      const transferId = url.pathname.replace("/internal/transfers/", "").replace("/ack", "");
+      return this.ackTransfer(request, transferId);
+    }
+
+    if (url.pathname.startsWith("/internal/transfers/") && request.method === "DELETE") {
+      const transferId = url.pathname.replace("/internal/transfers/", "");
+      return this.cleanupTransfer(request, transferId);
+    }
+
+    if (url.pathname === "/internal/transfers/sweep" && request.method === "POST") {
+      await this.sweepExpiredTransfers();
+      return Response.json({ ok: true, sweptAt: new Date().toISOString() });
     }
 
     return new Response("Not found in Durable Object", { status: 404 });
@@ -365,6 +424,146 @@ export class ClipSyncRoom extends DurableObject<Env> {
 
       case "presence:status":
         break;
+
+      case "transfer:init": {
+        const validation = validateTransferManifest(msg.manifest);
+        if (!validation.valid) {
+          const errMsg: WsServerMessage = { type: "error", code: "INVALID_TRANSFER", message: validation.error };
+          ws.send(JSON.stringify(errMsg));
+          return;
+        }
+
+        const manifest = validation.manifest;
+        manifest.senderDeviceId = attachment.deviceId;
+        if (!manifest.driveFileId && manifest.medium === "google_drive" && manifest.storageReference) {
+          manifest.driveFileId = manifest.storageReference;
+        }
+
+        const now = new Date().toISOString();
+
+        // Check duplicate
+        const existingRow = this.sql.exec(
+          `SELECT * FROM file_transfers WHERE (sha256_hash = ? OR transfer_id = ?) AND expires_at > ? AND status NOT IN ('expired', 'cancelled', 'failed') LIMIT 1`,
+          manifest.sha256Hash,
+          manifest.transferId,
+          now
+        ).toArray()[0];
+
+        if (existingRow) {
+          const existing = this.rowToManifest(existingRow);
+          ws.send(JSON.stringify({ type: "transfer:announced", manifest: existing }));
+          return;
+        }
+
+        this.sql.exec(
+          `INSERT INTO file_transfers (
+            transfer_id, sender_device_id, file_name, file_size_bytes, mime_type,
+            sha256_hash, encryption_iv, encryption_tag, medium, storage_reference,
+            drive_file_id, created_at, expires_at, status, delivered_to, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          manifest.transferId,
+          manifest.senderDeviceId,
+          manifest.fileName,
+          manifest.fileSizeBytes,
+          manifest.mimeType,
+          manifest.sha256Hash,
+          manifest.encryptionIv,
+          manifest.encryptionTag,
+          manifest.medium,
+          manifest.storageReference ?? null,
+          manifest.driveFileId ?? null,
+          manifest.createdAt,
+          manifest.expiresAt,
+          manifest.status,
+          JSON.stringify(manifest.deliveredTo ?? []),
+          now
+        );
+
+        await this.scheduleNextExpiryAlarm();
+
+        // Broadcast to all other sockets in room
+        const announceMsg: WsServerMessage = {
+          type: "transfer:announced",
+          manifest,
+        };
+        this.broadcast(JSON.stringify(announceMsg), ws);
+        break;
+      }
+
+      case "transfer:progress": {
+        const relayMsg: WsServerMessage = {
+          type: "transfer:progress_relay",
+          transferId: msg.transferId,
+          deviceId: attachment.deviceId,
+          bytesTransferred: msg.bytesTransferred,
+          totalBytes: msg.totalBytes,
+          phase: msg.phase,
+        };
+        this.broadcast(JSON.stringify(relayMsg), ws);
+        break;
+      }
+
+      case "transfer:ack": {
+        const row = this.sql.exec("SELECT * FROM file_transfers WHERE transfer_id = ?", msg.transferId).toArray()[0];
+        if (!row) break;
+
+        const deliveredTo: string[] = row.delivered_to ? JSON.parse(row.delivered_to as string) : [];
+        if (!deliveredTo.includes(attachment.deviceId)) {
+          deliveredTo.push(attachment.deviceId);
+        }
+
+        const peerRows = this.sql.exec(
+          "SELECT device_id FROM devices WHERE is_revoked = 0 AND device_id != ?",
+          row.sender_device_id
+        ).toArray();
+
+        const allDelivered = peerRows.length === 0 || peerRows.every((p: any) => deliveredTo.includes(p.device_id));
+        const newStatus = allDelivered ? "delivered" : row.status;
+        const now = new Date().toISOString();
+
+        this.sql.exec(
+          "UPDATE file_transfers SET delivered_to = ?, status = ?, updated_at = ? WHERE transfer_id = ?",
+          JSON.stringify(deliveredTo),
+          newStatus,
+          now,
+          msg.transferId
+        );
+
+        const driveFileId = (row.drive_file_id as string) || (row.storage_reference as string) || undefined;
+        const deliveredMsg: WsServerMessage = {
+          type: "transfer:delivered",
+          transferId: msg.transferId,
+          recipientDeviceId: attachment.deviceId,
+          allDelivered,
+          driveFileId,
+          shouldDelete: allDelivered,
+        };
+        this.broadcast(JSON.stringify(deliveredMsg));
+        break;
+      }
+
+      case "transfer:cleanup":
+      case "transfer:cancel": {
+        const row = this.sql.exec("SELECT * FROM file_transfers WHERE transfer_id = ?", msg.transferId).toArray()[0];
+        if (!row) break;
+
+        const now = new Date().toISOString();
+        this.sql.exec(
+          "UPDATE file_transfers SET status = 'cancelled', updated_at = ? WHERE transfer_id = ?",
+          now,
+          msg.transferId
+        );
+
+        const driveFileId = (row.drive_file_id as string) || (row.storage_reference as string) || undefined;
+        const deletedMsg: WsServerMessage = {
+          type: "transfer:deleted",
+          transferId: msg.transferId,
+          driveFileId,
+          reason: msg.type === "transfer:cancel" ? (msg.reason || "cancelled") : (msg.reason || "cleanup_requested"),
+        };
+        this.broadcast(JSON.stringify(deletedMsg));
+        break;
+      }
     }
   }
 
@@ -661,5 +860,261 @@ export class ClipSyncRoom extends DurableObject<Env> {
     this.broadcast(JSON.stringify(broadcastMsg));
 
     return Response.json({ accepted: true, itemId: item.itemId, sequenceNumber: nextSeq }, { status: 202 });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Transfer Engine Helpers
+  // ---------------------------------------------------------------------------
+
+  private rowToManifest(row: any): TransferManifest {
+    return {
+      version: PROTOCOL_VERSION,
+      transferId: row.transfer_id as string,
+      senderDeviceId: row.sender_device_id as string,
+      fileName: row.file_name as string,
+      fileSizeBytes: Number(row.file_size_bytes),
+      mimeType: row.mime_type as string,
+      sha256Hash: row.sha256_hash as string,
+      encryptionIv: row.encryption_iv as string,
+      encryptionTag: row.encryption_tag as string,
+      medium: row.medium as any,
+      storageReference: (row.storage_reference as string) || undefined,
+      driveFileId: (row.drive_file_id as string) || undefined,
+      createdAt: row.created_at as string,
+      expiresAt: row.expires_at as string,
+      status: row.status as any,
+      deliveredTo: row.delivered_to ? JSON.parse(row.delivered_to as string) : [],
+    };
+  }
+
+  private async sweepExpiredTransfers(): Promise<void> {
+    const now = new Date().toISOString();
+    const expiredRows = this.sql
+      .exec(
+        `SELECT * FROM file_transfers WHERE expires_at <= ? AND status NOT IN ('delivered', 'expired', 'cancelled')`,
+        now
+      )
+      .toArray();
+
+    for (const row of expiredRows) {
+      this.sql.exec(
+        `UPDATE file_transfers SET status = 'expired', updated_at = ? WHERE transfer_id = ?`,
+        now,
+        row.transfer_id
+      );
+
+      const expiredMsg: WsServerMessage = {
+        type: "transfer:expired",
+        transferId: row.transfer_id as string,
+        driveFileId: (row.drive_file_id as string) || (row.storage_reference as string) || undefined,
+        reason: "retention_exceeded",
+      };
+      this.broadcast(JSON.stringify(expiredMsg));
+    }
+
+    await this.scheduleNextExpiryAlarm();
+  }
+
+  private async scheduleNextExpiryAlarm(): Promise<void> {
+    const now = new Date().toISOString();
+    const nextRow = this.sql
+      .exec(
+        `SELECT expires_at FROM file_transfers WHERE expires_at > ? AND status NOT IN ('delivered', 'expired', 'cancelled') ORDER BY expires_at ASC LIMIT 1`,
+        now
+      )
+      .toArray()[0];
+
+    if (nextRow && nextRow.expires_at) {
+      const nextTime = new Date(nextRow.expires_at as string).getTime();
+      const currentAlarm = await this.ctx.storage.getAlarm();
+      if (currentAlarm === null || nextTime < currentAlarm) {
+        await this.ctx.storage.setAlarm(nextTime);
+      }
+    }
+  }
+
+  private async initTransfer(request: Request): Promise<Response> {
+    const device = await this.authenticateRequest(request);
+    if (!device) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+    const body = (await request.json()) as any;
+    const manifestCandidate = body?.manifest || body;
+    const validation = validateTransferManifest(manifestCandidate);
+    if (!validation.valid) {
+      return Response.json({ error: validation.error }, { status: 400 });
+    }
+
+    const manifest = validation.manifest;
+    manifest.senderDeviceId = device.device_id;
+    if (!manifest.driveFileId && manifest.medium === "google_drive" && manifest.storageReference) {
+      manifest.driveFileId = manifest.storageReference;
+    }
+
+    const now = new Date().toISOString();
+
+    const existingRow = this.sql
+      .exec(
+        `SELECT * FROM file_transfers WHERE (sha256_hash = ? OR transfer_id = ?) AND expires_at > ? AND status NOT IN ('expired', 'cancelled', 'failed') LIMIT 1`,
+        manifest.sha256Hash,
+        manifest.transferId,
+        now
+      )
+      .toArray()[0];
+
+    if (existingRow) {
+      const existing = this.rowToManifest(existingRow);
+      const resp: InitTransferResponse = {
+        ok: true,
+        manifest: existing,
+        duplicate: true,
+      };
+      return Response.json(resp, { status: 200 });
+    }
+
+    this.sql.exec(
+      `INSERT INTO file_transfers (
+        transfer_id, sender_device_id, file_name, file_size_bytes, mime_type,
+        sha256_hash, encryption_iv, encryption_tag, medium, storage_reference,
+        drive_file_id, created_at, expires_at, status, delivered_to, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      manifest.transferId,
+      manifest.senderDeviceId,
+      manifest.fileName,
+      manifest.fileSizeBytes,
+      manifest.mimeType,
+      manifest.sha256Hash,
+      manifest.encryptionIv,
+      manifest.encryptionTag,
+      manifest.medium,
+      manifest.storageReference ?? null,
+      manifest.driveFileId ?? null,
+      manifest.createdAt,
+      manifest.expiresAt,
+      manifest.status,
+      JSON.stringify(manifest.deliveredTo ?? []),
+      now
+    );
+
+    await this.scheduleNextExpiryAlarm();
+
+    const announcedMsg: WsServerMessage = {
+      type: "transfer:announced",
+      manifest,
+    };
+    this.broadcast(JSON.stringify(announcedMsg));
+
+    const resp: InitTransferResponse = {
+      ok: true,
+      manifest,
+      duplicate: false,
+    };
+    return Response.json(resp, { status: 201 });
+  }
+
+  private async getPendingTransfers(request: Request): Promise<Response> {
+    const device = await this.authenticateRequest(request);
+    if (!device) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+    const now = new Date().toISOString();
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM file_transfers WHERE status IN ('ready', 'uploading', 'pending') AND expires_at > ? ORDER BY created_at DESC`,
+        now
+      )
+      .toArray();
+
+    const transfers = rows.map((r: any) => this.rowToManifest(r));
+    const resp: PendingTransfersResponse = { transfers };
+    return Response.json(resp, { status: 200 });
+  }
+
+  private async ackTransfer(request: Request, transferId: string): Promise<Response> {
+    const device = await this.authenticateRequest(request);
+    if (!device) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+    let recipientDeviceId = device.device_id as string;
+    try {
+      const body = (await request.json()) as any;
+      if (body?.recipientDeviceId) recipientDeviceId = body.recipientDeviceId;
+    } catch {}
+
+    const row = this.sql.exec("SELECT * FROM file_transfers WHERE transfer_id = ?", transferId).toArray()[0];
+    if (!row) {
+      return Response.json({ error: "Transfer not found" }, { status: 404 });
+    }
+
+    const deliveredTo: string[] = row.delivered_to ? JSON.parse(row.delivered_to as string) : [];
+    if (!deliveredTo.includes(recipientDeviceId)) {
+      deliveredTo.push(recipientDeviceId);
+    }
+
+    const peerRows = this.sql
+      .exec("SELECT device_id FROM devices WHERE is_revoked = 0 AND device_id != ?", row.sender_device_id)
+      .toArray();
+
+    const allDelivered = peerRows.length === 0 || peerRows.every((p: any) => deliveredTo.includes(p.device_id));
+    const newStatus = allDelivered ? "delivered" : row.status;
+    const now = new Date().toISOString();
+
+    this.sql.exec(
+      "UPDATE file_transfers SET delivered_to = ?, status = ?, updated_at = ? WHERE transfer_id = ?",
+      JSON.stringify(deliveredTo),
+      newStatus,
+      now,
+      transferId
+    );
+
+    const driveFileId = (row.drive_file_id as string) || (row.storage_reference as string) || undefined;
+    const deliveredMsg: WsServerMessage = {
+      type: "transfer:delivered",
+      transferId,
+      recipientDeviceId,
+      allDelivered,
+      driveFileId,
+      shouldDelete: allDelivered,
+    };
+    this.broadcast(JSON.stringify(deliveredMsg));
+
+    const resp: AckTransferResponse = {
+      ok: true,
+      transferId,
+      allDelivered,
+      shouldDelete: allDelivered,
+      driveFileId,
+    };
+    return Response.json(resp, { status: 200 });
+  }
+
+  private async cleanupTransfer(request: Request, transferId: string): Promise<Response> {
+    const device = await this.authenticateRequest(request);
+    if (!device) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+    const row = this.sql.exec("SELECT * FROM file_transfers WHERE transfer_id = ?", transferId).toArray()[0];
+    if (!row) {
+      return Response.json({ error: "Transfer not found" }, { status: 404 });
+    }
+
+    const now = new Date().toISOString();
+    this.sql.exec(
+      "UPDATE file_transfers SET status = 'cancelled', updated_at = ? WHERE transfer_id = ?",
+      now,
+      transferId
+    );
+
+    const driveFileId = (row.drive_file_id as string) || (row.storage_reference as string) || undefined;
+    const deletedMsg: WsServerMessage = {
+      type: "transfer:deleted",
+      transferId,
+      driveFileId,
+      reason: "cleanup_requested",
+    };
+    this.broadcast(JSON.stringify(deletedMsg));
+
+    const resp: CleanupTransferResponse = {
+      ok: true,
+      transferId,
+      driveFileId,
+    };
+    return Response.json(resp, { status: 200 });
   }
 }

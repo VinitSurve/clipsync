@@ -140,4 +140,54 @@ app.post("/v1/sync", async (c) => {
   return stub.fetch(internalReq);
 });
 
+// Large File & Image Transfers
+app.post("/v1/transfers/init", async (c) => {
+  const stub = getRoomStub(c);
+  const internalReq = new Request("http://internal/internal/transfers/init", {
+    method: "POST",
+    headers: c.req.raw.headers,
+    body: await c.req.raw.text(),
+  });
+  return stub.fetch(internalReq);
+});
+
+app.get("/v1/transfers/pending", (c) => {
+  const stub = getRoomStub(c);
+  const internalReq = new Request("http://internal/internal/transfers/pending", {
+    method: "GET",
+    headers: c.req.raw.headers,
+  });
+  return stub.fetch(internalReq);
+});
+
+app.post("/v1/transfers/:transferId/ack", async (c) => {
+  const stub = getRoomStub(c);
+  const transferId = c.req.param("transferId");
+  const internalReq = new Request(`http://internal/internal/transfers/${encodeURIComponent(transferId)}/ack`, {
+    method: "POST",
+    headers: c.req.raw.headers,
+    body: await c.req.raw.text(),
+  });
+  return stub.fetch(internalReq);
+});
+
+app.delete("/v1/transfers/:transferId", (c) => {
+  const stub = getRoomStub(c);
+  const transferId = c.req.param("transferId");
+  const internalReq = new Request(`http://internal/internal/transfers/${encodeURIComponent(transferId)}`, {
+    method: "DELETE",
+    headers: c.req.raw.headers,
+  });
+  return stub.fetch(internalReq);
+});
+
+app.post("/v1/transfers/sweep", (c) => {
+  const stub = getRoomStub(c);
+  const internalReq = new Request("http://internal/internal/transfers/sweep", {
+    method: "POST",
+    headers: c.req.raw.headers,
+  });
+  return stub.fetch(internalReq);
+});
+
 export default app;

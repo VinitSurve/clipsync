@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import Network
 
 public struct DisplayClipboardItem: Identifiable, Equatable {
     public let id: String
@@ -16,6 +17,23 @@ public final class AppState: ObservableObject {
     private static let serverUrlKey = "clipsync.serverUrl"
     private static let syncPassphraseKey = "clipsync.syncPassphrase"
 
+    // Safe diagnostic logging (Never logs tokens or secrets)
+    public static func logDiag(_ message: String) {
+        let formatter = ISO8601DateFormatter()
+        let timestamp = formatter.string(from: Date())
+        print("[SyncServer] [\(timestamp)] \(message)")
+    }
+    private func logDiag(_ message: String) {
+        Self.logDiag(message)
+    }
+
+    public typealias ValidationResult = DeviceValidationResult
+
+    private var reconnectTimer: Timer?
+    private var reconnectAttempts: Int = 0
+    private let pathMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "com.clipsync.networkmonitor")
+
     @Published public var connectionState: WebSocketSyncService.ConnectionState = .disconnected
     @Published public var isPaused: Bool = false
     @Published public var history: [DisplayClipboardItem] = []
@@ -23,6 +41,9 @@ public final class AppState: ObservableObject {
     @Published public var activePairingCode: String?
     @Published public var pairingQrDataUrl: String?
     @Published public var statusMessage: String = "Ready"
+
+    @Published public var googleDrive: GoogleDriveService = .shared
+    @Published public var transferManager: TransferManager?
 
     @Published public var serverUrl: String {
         didSet {
@@ -124,7 +145,46 @@ public final class AppState: ObservableObject {
         self.serverUrl = savedUrl
         self.syncPassphrase = savedPass
         checkLaunchAtLoginStatus()
+        setupNetworkMonitoring()
         bootstrapDevice()
+    }
+
+    private func setupNetworkMonitoring() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let isOnline = path.status == .satisfied
+                self.logDiag("Network interface status: \(isOnline ? "Satisfied (Online)" : "Unsatisfied (Offline)")")
+                if isOnline && self.connectionState == .disconnected {
+                    self.logDiag("Network available; triggering immediate reconnection...")
+                    self.reconnectAttempts = 0
+                    Task {
+                        await self.connectToServer()
+                    }
+                }
+            }
+        }
+        pathMonitor.start(queue: monitorQueue)
+    }
+
+    private func cancelAutoReconnect() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+    }
+
+    private func scheduleAutoReconnect() {
+        reconnectTimer?.invalidate()
+        let delay = min(pow(2.0, Double(min(reconnectAttempts, 5))), 30.0) // 2s, 4s, 8s, 16s, 30s
+        reconnectAttempts += 1
+        logDiag("Scheduling auto-reconnect attempt #\(reconnectAttempts) in \(Int(delay))s...")
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                guard self.connectionState != .connected else { return }
+                self.logDiag("Executing scheduled auto-reconnect attempt #\(self.reconnectAttempts)...")
+                await self.connectToServer()
+            }
+        }
     }
 
     public func bootstrapDevice() {
@@ -134,9 +194,11 @@ public final class AppState: ObservableObject {
     }
 
     public func connectToServer() async {
+        cancelAutoReconnect()
         let targetUrl = cleanServerUrl
         guard !targetUrl.isEmpty, let _ = URL(string: targetUrl) else {
             self.statusMessage = "Invalid Server URL"
+            self.connectionState = .disconnected
             return
         }
 
@@ -152,13 +214,32 @@ public final class AppState: ObservableObject {
         let cachedSalt = UserDefaults.standard.string(forKey: syncSaltKey)
 
         if let token = cachedToken, let deviceId = cachedDeviceId, let salt = cachedSalt, !token.isEmpty {
-            if await validateCredentials(serverUrl: targetUrl, token: token) {
+            logDiag("Validating cached credentials against \(targetUrl)...")
+            let validation = await validateCredentials(serverUrl: targetUrl, token: token)
+            switch validation {
+            case .valid:
+                logDiag("Cached credentials verified successfully. Initializing sync services...")
                 self.deviceId = deviceId
                 self.token = token
                 self.syncSalt = salt
+                self.reconnectAttempts = 0
                 initServicesAndConnect()
                 await self.refreshDevices()
                 self.statusMessage = "Connected to ClipSync"
+                return
+
+            case .invalidCredentials(let code):
+                logDiag("Cached credentials rejected by server (HTTP \(code)). Clearing stale credentials...")
+                UserDefaults.standard.removeObject(forKey: tokenKey)
+                UserDefaults.standard.removeObject(forKey: deviceIdKey)
+                UserDefaults.standard.removeObject(forKey: syncSaltKey)
+                // Fall through to register clean device credentials on this server
+
+            case .unreachable(let reason, let elapsed):
+                logDiag("Server unreachable during credential validation (\(elapsed)ms): \(reason)")
+                self.connectionState = .disconnected
+                self.statusMessage = "Server unreachable (\(reason))"
+                scheduleAutoReconnect()
                 return
             }
         }
@@ -167,43 +248,69 @@ public final class AppState: ObservableObject {
         await registerFreshDevice(serverUrl: targetUrl)
     }
 
-    private func validateCredentials(serverUrl: String, token: String) async -> Bool {
-        guard let url = URL(string: "\(serverUrl)/v1/devices") else { return false }
+    public func validateCredentials(serverUrl: String, token: String) async -> ValidationResult {
+        guard let url = URL(string: "\(serverUrl)/v1/devices") else {
+            return .unreachable(reason: "Invalid server URL", elapsedMs: 0)
+        }
         var req = URLRequest(url: url)
+        req.timeoutInterval = 10.0
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let start = Date()
         do {
             let (_, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                return true
+            let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+            guard let http = response as? HTTPURLResponse else {
+                logDiag("GET /v1/devices -> Non-HTTP response in \(elapsed)ms")
+                return .unreachable(reason: "Non-HTTP server response", elapsedMs: elapsed)
             }
-        } catch {}
-        return false
+            logDiag("GET /v1/devices -> HTTP \(http.statusCode) in \(elapsed)ms")
+            if http.statusCode == 200 {
+                return .valid
+            } else if http.statusCode == 401 || http.statusCode == 403 {
+                return .invalidCredentials(statusCode: http.statusCode)
+            } else {
+                return .unreachable(reason: "HTTP \(http.statusCode)", elapsedMs: elapsed)
+            }
+        } catch {
+            let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+            logDiag("GET /v1/devices failed in \(elapsed)ms: \(error.localizedDescription)")
+            return .unreachable(reason: error.localizedDescription, elapsedMs: elapsed)
+        }
     }
 
     private func registerFreshDevice(serverUrl: String) async {
+        self.statusMessage = "Registering device on server..."
+        guard let url = URL(string: "\(serverUrl)/v1/devices/register") else {
+            self.statusMessage = "Invalid URL: \(serverUrl)/v1/devices/register"
+            self.connectionState = .disconnected
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10.0
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "label": "MacBook Air M5",
+            "platform": "macos"
+        ]
+        let start = Date()
         do {
-            self.statusMessage = "Registering device on server..."
-            guard let url = URL(string: "\(serverUrl)/v1/devices/register") else {
-                self.statusMessage = "Invalid URL: \(serverUrl)/v1/devices/register"
-                return
-            }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            let body: [String: Any] = [
-                "label": "MacBook Air M5",
-                "platform": "macos"
-            ]
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
             let (data, response) = try await URLSession.shared.data(for: req)
+            let elapsed = Int(Date().timeIntervalSince(start) * 1000)
             guard let http = response as? HTTPURLResponse else {
+                logDiag("POST /v1/devices/register -> Non-HTTP response in \(elapsed)ms")
                 self.statusMessage = "Registration failed: No server response"
+                self.connectionState = .disconnected
+                scheduleAutoReconnect()
                 return
             }
+            logDiag("POST /v1/devices/register -> HTTP \(http.statusCode) in \(elapsed)ms")
             guard (200...299).contains(http.statusCode) else {
                 let errText = String(data: data, encoding: .utf8) ?? ""
                 self.statusMessage = "Registration failed (HTTP \(http.statusCode)): \(errText)"
+                self.connectionState = .disconnected
+                scheduleAutoReconnect()
                 return
             }
 
@@ -212,6 +319,7 @@ public final class AppState: ObservableObject {
             self.deviceId = resp.deviceId
             self.token = resp.token
             self.syncSalt = resp.syncSalt
+            self.reconnectAttempts = 0
 
             UserDefaults.standard.set(resp.token, forKey: tokenKey)
             UserDefaults.standard.set(resp.deviceId, forKey: deviceIdKey)
@@ -221,7 +329,11 @@ public final class AppState: ObservableObject {
             await self.refreshDevices()
             self.statusMessage = "Connected to ClipSync"
         } catch {
-            self.statusMessage = "Registration error: \(error.localizedDescription)"
+            let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+            logDiag("POST /v1/devices/register failed in \(elapsed)ms: \(error.localizedDescription)")
+            self.statusMessage = "Registration error (\(elapsed)ms): \(error.localizedDescription)"
+            self.connectionState = .disconnected
+            scheduleAutoReconnect()
         }
     }
 
@@ -251,9 +363,31 @@ public final class AppState: ObservableObject {
         )
         self.syncService = sync
 
+        let manager = TransferManager(
+            serverUrl: cleanServerUrl,
+            deviceId: deviceId,
+            token: token,
+            crypto: crypto,
+            googleDrive: googleDrive,
+            syncService: sync,
+            clipboardMonitor: monitor
+        )
+        self.transferManager = manager
+
         sync.onStateChange = { [weak self] state in
             DispatchQueue.main.async {
                 self?.connectionState = state
+                if state == .connected {
+                    self?.statusMessage = "Connected to ClipSync"
+                    Task { [weak self] in
+                        await self?.transferManager?.syncPendingTransfersOnStartupOrReconnect()
+                        await self?.transferManager?.sweepExpiredAndOrphanedFiles()
+                    }
+                } else if state == .disconnected {
+                    if self?.statusMessage == "Connected to ClipSync" {
+                        self?.statusMessage = "Disconnected from sync server"
+                    }
+                }
             }
         }
 
@@ -274,16 +408,59 @@ public final class AppState: ObservableObject {
             }
         }
 
-        monitor.onNewLocalCopy = { [weak self] text, app in
+        monitor.onClipboardEvent = { [weak self] event in
             DispatchQueue.main.async {
-                self?.syncService?.broadcastText(text, sourceApp: app)
-                self?.addItemToHistory(text: text, sourceApp: app, isRemote: false)
-                self?.statusMessage = "Copied & Synced"
+                guard let self = self else { return }
+                switch event {
+                case .text(let text, let app):
+                    self.syncService?.broadcastText(text, sourceApp: app)
+                    self.addItemToHistory(text: text, sourceApp: app, isRemote: false)
+                    self.statusMessage = "Copied & Synced Text"
+
+                case .image(let data, let mimeType, let fileName, let app):
+                    self.transferManager?.handleLocalImage(data: data, mimeType: mimeType, fileName: fileName, sourceApp: app)
+                    self.addItemToHistory(text: "🖼️ \(fileName)", sourceApp: app, isRemote: false)
+                    self.statusMessage = "Uploading image: \(fileName)..."
+
+                case .files(let urls, let app):
+                    self.transferManager?.handleLocalFiles(urls: urls, sourceApp: app)
+                    let name = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) files"
+                    self.addItemToHistory(text: "📁 \(name)", sourceApp: app, isRemote: false)
+                    self.statusMessage = "Uploading: \(name)..."
+
+                case .error(let message):
+                    self.statusMessage = message
+                }
             }
         }
 
         monitor.start()
         sync.connect()
+    }
+
+    public func connectGoogleDrive() {
+        googleDrive.startAuthorization()
+    }
+
+    public func disconnectGoogleDrive() {
+        googleDrive.disconnect()
+        statusMessage = "Google Drive disconnected"
+    }
+
+    public func cancelTransfer(recordId: String) {
+        transferManager?.cancelTransfer(recordId: recordId)
+    }
+
+    public func retryTransfer(recordId: String) {
+        transferManager?.retryTransfer(recordId: recordId)
+    }
+
+    public func sweepGoogleDrive() {
+        Task {
+            statusMessage = "Sweeping expired Drive files..."
+            await transferManager?.sweepExpiredAndOrphanedFiles()
+            statusMessage = "Drive sweep completed"
+        }
     }
 
     public func togglePause() {
@@ -312,13 +489,17 @@ public final class AppState: ObservableObject {
                 }
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
+                req.timeoutInterval = 10.0
                 req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
+                let start = Date()
                 let (data, response) = try await URLSession.shared.data(for: req)
+                let elapsed = Int(Date().timeIntervalSince(start) * 1000)
                 guard let http = response as? HTTPURLResponse else {
                     self.statusMessage = "Pairing failed: Invalid server response"
                     return
                 }
+                logDiag("POST /v1/auth/pairing/session -> HTTP \(http.statusCode) in \(elapsed)ms")
 
                 if http.statusCode == 401 {
                     self.statusMessage = "Pairing failed: Token expired or rejected by server. Re-registering..."
@@ -343,7 +524,7 @@ public final class AppState: ObservableObject {
                 self.statusMessage = "Pairing code: \(resp.code)"
             } catch {
                 self.statusMessage = "Failed to create pairing session: \(error.localizedDescription)"
-                print("[ClipSync] createPairingSession error: \(error)")
+                logDiag("createPairingSession error: \(error.localizedDescription)")
             }
         }
     }
@@ -353,16 +534,19 @@ public final class AppState: ObservableObject {
         do {
             guard let url = URL(string: "\(cleanServerUrl)/v1/devices") else { return }
             var req = URLRequest(url: url)
+            req.timeoutInterval = 10.0
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
+            let start = Date()
             let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                return
-            }
+            let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+            guard let http = response as? HTTPURLResponse else { return }
+            logDiag("GET /v1/devices (refresh) -> HTTP \(http.statusCode) in \(elapsed)ms")
+            guard (200...299).contains(http.statusCode) else { return }
             let resp = try JSONDecoder().decode(DeviceListResponse.self, from: data)
             self.devices = resp.devices
         } catch {
-            print("[ClipSync] refreshDevices error: \(error)")
+            logDiag("refreshDevices error: \(error.localizedDescription)")
         }
     }
 
