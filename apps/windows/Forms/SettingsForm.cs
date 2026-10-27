@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -50,6 +51,7 @@ public sealed class SettingsForm : Form
     private readonly Action _onOpenPairing;
     private readonly GoogleDriveService? _googleDrive;
     private readonly TransferManager? _transferManager;
+    private readonly string _appVersion;
     private bool _isPaused;
 
     public SettingsForm(
@@ -79,7 +81,11 @@ public sealed class SettingsForm : Form
         _transferManager = transferManager;
         _isPaused = isPaused;
 
-        Text = "ClipSync - Settings";
+        _appVersion = typeof(SettingsForm).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion ?? "1.0.0";
+
+        Text = $"ClipSync - Settings (v{_appVersion})";
         Size = new Size(580, 640);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -604,7 +610,7 @@ public sealed class SettingsForm : Form
         var lblAboutText = new Label
         {
             Text = "ClipSync - Universal End-to-End Encrypted Clipboard\n" +
-                   "Version: 1.0.0 (Native Windows 64-bit Standalone)\n" +
+                   $"Version: {_appVersion} (Native Windows 64-bit Standalone)\n" +
                    "Protocol Version: 1.0 | Phase 2C Image & File Sync Active\n" +
                    "Storage: Google Drive (100% Free, 100 MB max per item, 24h retention)\n" +
                    "Cloud Backend: Cloudflare Workers + Durable Objects (100% Free Tier)\n" +

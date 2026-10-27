@@ -5,7 +5,8 @@
 #>
 param (
     [switch]$NoDesktopShortcut = $false,
-    [switch]$NoLaunch = $false
+    [switch]$NoLaunch = $false,
+    [switch]$SkipBuild = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,8 +15,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir = Split-Path -Parent $ScriptDir
 $DistExe = Join-Path $RootDir "dist\windows\ClipSync.exe"
 
-# If not packaged yet, run package script first
-if (-not (Test-Path $DistExe)) {
+# By default, ALWAYS rebuild from source to guarantee the latest code is installed.
+# Only skip if explicitly requested via -SkipBuild AND the dist executable already exists.
+if (-not $SkipBuild) {
+    Write-Host "==> Rebuilding ClipSync from source to ensure latest features..." -ForegroundColor Cyan
+    & (Join-Path $ScriptDir "package-windows.ps1")
+} elseif (-not (Test-Path $DistExe)) {
+    Write-Host "==> Packaged binary not found. Building now..." -ForegroundColor Cyan
     & (Join-Path $ScriptDir "package-windows.ps1")
 }
 
@@ -31,12 +37,54 @@ if (-not (Test-Path $InstallDir)) {
 
 $TargetExe = Join-Path $InstallDir "ClipSync.exe"
 
-Write-Host "==> Stopping any running instances of ClipSync..." -ForegroundColor Yellow
-Get-Process -Name "ClipSync" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 600
+# Stop any currently running ClipSync processes
+Write-Host "==> Checking for running ClipSync processes..." -ForegroundColor Yellow
+$running = Get-Process -Name "ClipSync" -ErrorAction SilentlyContinue
+if ($running) {
+    $count = @($running).Count
+    Write-Host "    Found $count running ClipSync process(es). Terminating..." -ForegroundColor Yellow
+    foreach ($p in $running) {
+        try {
+            Write-Host "    Stopping PID $($p.Id)..." -ForegroundColor Gray
+            $p | Stop-Process -Force -ErrorAction SilentlyContinue
+        } catch {}
+    }
+    
+    # Wait for processes to exit and release file locks
+    $waitCount = 0
+    while ((Get-Process -Name "ClipSync" -ErrorAction SilentlyContinue) -and ($waitCount -lt 50)) {
+        Start-Sleep -Milliseconds 100
+        $waitCount++
+    }
+}
+
+# Ensure destination file is not locked
+if (Test-Path $TargetExe) {
+    try {
+        Remove-Item -Path $TargetExe -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not immediately remove $($TargetExe): $($_.Exception.Message)"
+        Write-Host "Waiting 2 seconds and attempting taskkill..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        taskkill /F /IM ClipSync.exe /T 2>$null
+        Start-Sleep -Milliseconds 500
+        Remove-Item -Path $TargetExe -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Host "==> Installing ClipSync to $TargetExe..." -ForegroundColor Cyan
 Copy-Item -Path $DistExe -Destination $TargetExe -Force
+
+# Verify installation
+if (-not (Test-Path $TargetExe)) {
+    Write-Error "Failed to install ClipSync.exe to $TargetExe."
+    exit 1
+}
+
+$TargetItem = Get-Item $TargetExe
+$TargetSizeMB = [math]::Round(($TargetItem.Length / 1MB), 1)
+$TargetDate = $TargetItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+Write-Host "    Verified target: $TargetExe ($TargetSizeMB MB, modified: $TargetDate)" -ForegroundColor Green
 
 # Create Start Menu shortcut
 $StartMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
@@ -76,7 +124,7 @@ Write-Host "==> Configured auto-startup at Windows login (Registry: $RunKey\Clip
 
 # Launch the app in the system tray
 if (-not $NoLaunch) {
-    Write-Host "==> Launching ClipSync in system tray..." -ForegroundColor Green
+    Write-Host "==> Launching updated ClipSync in system tray..." -ForegroundColor Green
     Start-Process -FilePath $TargetExe
 }
 
@@ -85,6 +133,7 @@ Write-Host "====================================================================
 Write-Host "[OK] ClipSync Windows Installation Complete!" -ForegroundColor Green
 Write-Host "==========================================================================" -ForegroundColor Green
 Write-Host "- Application:      $TargetExe" -ForegroundColor White
+Write-Host "- Size / Modified:  $TargetSizeMB MB ($TargetDate)" -ForegroundColor White
 Write-Host "- Start Menu:       ClipSync" -ForegroundColor White
 Write-Host "- Start at Login:   Enabled (silent background tray launch)" -ForegroundColor White
 Write-Host "- Everyday Use:     Launch from Start Menu or Desktop. No commands required!" -ForegroundColor White

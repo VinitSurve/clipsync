@@ -11,6 +11,17 @@ $DistDir = Join-Path $RootDir "dist\windows"
 
 Write-Host "==> Packaging ClipSync for Windows (Self-Contained Single-File)..." -ForegroundColor Cyan
 
+# Determine Git commit hash if available
+$GitHash = "21dc61a"
+try {
+    $foundHash = (git rev-parse --short HEAD 2>$null)
+    if ($foundHash) {
+        $GitHash = $foundHash.Trim()
+    }
+} catch {
+    # fallback to default
+}
+
 if (Test-Path $DistDir) {
     Remove-Item -Recurse -Force $DistDir
 }
@@ -21,9 +32,14 @@ if (-not (Get-Command "dotnet" -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+Write-Host "    Git Commit: $GitHash" -ForegroundColor Gray
+Write-Host "    Source Dir: $WindowsDir" -ForegroundColor Gray
+Write-Host "    Output Dir: $DistDir" -ForegroundColor Gray
+
 Push-Location $WindowsDir
 try {
-    dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "$DistDir"
+    Write-Host "    Publishing ClipSync win-x64 self-contained executable..." -ForegroundColor Gray
+    dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:InformationalVersion="1.0.0-$GitHash" -o "$DistDir"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "dotnet publish failed with exit code $LASTEXITCODE."
         exit $LASTEXITCODE
@@ -35,8 +51,9 @@ finally {
 
 $ExePath = Join-Path $DistDir "ClipSync.exe"
 if (Test-Path $ExePath) {
+    $ExeSizeMB = [math]::Round(((Get-Item $ExePath).Length / 1MB), 1)
     Write-Host "==> ClipSync Windows Application successfully packaged at:" -ForegroundColor Green
-    Write-Host "    $ExePath" -ForegroundColor White
+    Write-Host "    $ExePath ($ExeSizeMB MB, commit $GitHash)" -ForegroundColor White
 } else {
     Write-Error "Failed to find published ClipSync.exe at $ExePath"
 }
