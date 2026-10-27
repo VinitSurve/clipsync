@@ -29,11 +29,11 @@ class ClipSyncCaptureActivity : Activity() {
                 // Triggered when user selects text in any app and picks "ClipSync"
                 val selectedText = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
                 if (!selectedText.isNullOrBlank()) {
-                    ClipboardStateManager.markSent(selectedText)
                     val syncIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
                         putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, selectedText)
+                        putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
                     }
-                    startService(syncIntent)
+                    androidx.core.content.ContextCompat.startForegroundService(this, syncIntent)
                     val preview = if (selectedText.length > 25) selectedText.take(25) + "..." else selectedText
                     Toast.makeText(this, "ClipSync: Synced selection \"$preview\"", Toast.LENGTH_SHORT).show()
                 }
@@ -56,11 +56,11 @@ class ClipSyncCaptureActivity : Activity() {
                         if (clip != null && clip.itemCount > 0) {
                             val text = clip.getItemAt(0).text?.toString()
                             if (!text.isNullOrBlank()) {
-                                ClipboardStateManager.markSent(text)
                                 val syncIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
                                     putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
+                                    putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
                                 }
-                                startService(syncIntent)
+                                androidx.core.content.ContextCompat.startForegroundService(this, syncIntent)
                                 val preview = if (text.length > 25) text.take(25) + "..." else text
                                 Toast.makeText(this, "ClipSync: Synced \"$preview\"", Toast.LENGTH_SHORT).show()
                             } else {

@@ -42,7 +42,7 @@ class ClipSyncForegroundService : Service() {
     private lateinit var secureStorage: SecureStorage
     private lateinit var okHttpClient: OkHttpClient
 
-    private var webSocket: WebSocket? = null
+    private var activeWebSocket: WebSocket? = null
     private var crypto: ClipSyncCrypto? = null
     private val gson = Gson()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -52,6 +52,20 @@ class ClipSyncForegroundService : Service() {
     private var isExplicitlyStopped = false
     private var currentConnectionState = STATE_DISCONNECTED
 
+    @Volatile
+    var pendingOutboundText: String? = null
+        private set
+
+    private val reconnectRunnable = Runnable {
+        if (!isExplicitlyStopped && secureStorage.hasCredentials()) {
+            connectWebSocket()
+        }
+    }
+
+    private fun cancelScheduledReconnect() {
+        mainHandler.removeCallbacks(reconnectRunnable)
+    }
+
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         onClipboardChanged()
     }
@@ -59,7 +73,7 @@ class ClipSyncForegroundService : Service() {
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             Log.i(TAG, "Network interface active")
-            if (!isExplicitlyStopped && secureStorage.hasCredentials() && (webSocket == null || currentConnectionState != STATE_CONNECTED)) {
+            if (!isExplicitlyStopped && secureStorage.hasCredentials() && (activeWebSocket == null || currentConnectionState != STATE_CONNECTED)) {
                 mainHandler.post {
                     reconnectAttempt = 0
                     connectWebSocket()
@@ -105,13 +119,14 @@ class ClipSyncForegroundService : Service() {
             if (it.hasExtra(EXTRA_OUTBOUND_TEXT)) {
                 val outbound = it.getStringExtra(EXTRA_OUTBOUND_TEXT)
                 if (!outbound.isNullOrBlank()) {
-                    broadcastText(outbound, isManual = true)
+                    val isManual = it.getBooleanExtra(EXTRA_IS_MANUAL, false)
+                    broadcastText(outbound, isManual = isManual)
                 }
             }
 
             if (it.getBooleanExtra(EXTRA_RECONNECT, false)) {
                 reconnectAttempt = 0
-                connectWebSocket()
+                connectWebSocket(force = true)
             }
         }
 
@@ -119,7 +134,10 @@ class ClipSyncForegroundService : Service() {
 
         if (secureStorage.hasCredentials()) {
             initCrypto()
-            connectWebSocket()
+            // Do NOT reconnect if already connected or actively connecting!
+            if (activeWebSocket == null && currentConnectionState != STATE_CONNECTED && currentConnectionState != STATE_CONNECTING) {
+                connectWebSocket()
+            }
         } else {
             updateNotification("ClipSync — Waiting for device pairing")
             broadcastConnectionState(STATE_NOT_PAIRED)
@@ -137,11 +155,23 @@ class ClipSyncForegroundService : Service() {
     }
 
     @Synchronized
-    private fun connectWebSocket() {
-        if (!secureStorage.hasCredentials()) return
-        isExplicitlyStopped = false
+    private fun connectWebSocket(force: Boolean = false) {
+        if (!secureStorage.hasCredentials() || isExplicitlyStopped) return
 
-        webSocket?.close(1000, "Reconnecting")
+        cancelScheduledReconnect()
+
+        // If already connected and not forced, keep existing connection
+        if (!force && activeWebSocket != null && currentConnectionState == STATE_CONNECTED) {
+            Log.d(TAG, "WebSocket already connected, skipping redundant connection")
+            return
+        }
+
+        val oldSocket = activeWebSocket
+        activeWebSocket = null
+        try {
+            oldSocket?.close(1000, "Reconnecting")
+        } catch (_: Exception) {}
+
         broadcastConnectionState(STATE_CONNECTING)
 
         val serverUrl = secureStorage.serverUrl
@@ -156,20 +186,39 @@ class ClipSyncForegroundService : Service() {
         Log.i(TAG, "Connecting to WebSocket: $wsScheme://$cleanHost/v1/events")
 
         val request = Request.Builder().url(wsUrl).build()
-        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+        activeWebSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (webSocket !== activeWebSocket) {
+                    Log.w(TAG, "Ignoring onOpen for superseded WebSocket")
+                    try { webSocket.close(1000, "Stale") } catch (_: Exception) {}
+                    return
+                }
                 Log.i(TAG, "WebSocket connected successfully.")
                 reconnectAttempt = 0
+                cancelScheduledReconnect()
                 broadcastConnectionState(STATE_CONNECTED)
                 updateNotification("ClipSync Connected — Clipboard live")
+
+                // Flush pending outbound text if queued while disconnected
+                val pending = pendingOutboundText
+                if (!pending.isNullOrBlank()) {
+                    Log.i(TAG, "Flushing pending outbound text on connect: len=${pending.length}")
+                    broadcastText(pending)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket !== activeWebSocket) return
                 handleIncomingMessage(text)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (webSocket !== activeWebSocket) {
+                    Log.d(TAG, "Ignoring onClosed for superseded WebSocket ($code: $reason)")
+                    return
+                }
                 Log.w(TAG, "WebSocket closed ($code): $reason")
+                activeWebSocket = null
                 if (!isExplicitlyStopped) {
                     broadcastConnectionState(STATE_CONNECTING)
                     scheduleReconnect()
@@ -177,7 +226,12 @@ class ClipSyncForegroundService : Service() {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (webSocket !== activeWebSocket) {
+                    Log.d(TAG, "Ignoring onFailure for superseded WebSocket: ${t.localizedMessage}")
+                    return
+                }
                 Log.e(TAG, "WebSocket failure: ${t.localizedMessage}")
+                activeWebSocket = null
                 if (!isExplicitlyStopped) {
                     broadcastConnectionState(STATE_ERROR, t.localizedMessage ?: "Connection error")
                     updateNotification("ClipSync Disconnected — Reconnecting...")
@@ -189,14 +243,11 @@ class ClipSyncForegroundService : Service() {
 
     private fun scheduleReconnect() {
         if (isExplicitlyStopped) return
+        cancelScheduledReconnect()
         val delaySec = ClipboardStateManager.calculateBackoffSeconds(reconnectAttempt)
         reconnectAttempt++
         Log.i(TAG, "Scheduling reconnect in ${delaySec}s (attempt #$reconnectAttempt)")
-        mainHandler.postDelayed({
-            if (!isExplicitlyStopped && secureStorage.hasCredentials()) {
-                connectWebSocket()
-            }
-        }, delaySec * 1000)
+        mainHandler.postDelayed(reconnectRunnable, delaySec * 1000)
     }
 
     private fun handleIncomingMessage(rawJson: String) {
@@ -216,7 +267,7 @@ class ClipSyncForegroundService : Service() {
                     addProperty("itemId", itemId)
                     addProperty("sequenceNumber", seq)
                 }
-                webSocket?.send(ack.toString())
+                activeWebSocket?.send(ack.toString())
 
                 // 2. Loop & duplicate suppression
                 if (sourceDeviceId.isNotEmpty() && sourceDeviceId == secureStorage.deviceId) {
@@ -298,10 +349,9 @@ class ClipSyncForegroundService : Service() {
                 val text = clip.getItemAt(0).text?.toString()
                 if (!text.isNullOrBlank()) {
                     val hash = ClipSyncCrypto.sha256(text)
-                    if (ClipboardStateManager.isEcho(hash)) return
-                    if (ClipboardStateManager.isAlreadySynced(hash)) return
-
-                    ClipboardStateManager.markSent(text)
+                    if (ClipboardStateManager.isEcho(hash) || ClipboardStateManager.isAlreadySynced(hash)) {
+                        return
+                    }
                     broadcastText(text, isManual = false)
                 }
             }
@@ -313,11 +363,24 @@ class ClipSyncForegroundService : Service() {
     fun broadcastText(text: String, isManual: Boolean = false) {
         if (crypto == null) initCrypto()
         val safeCrypto = crypto ?: return
-        val ws = webSocket ?: return
+        val hash = ClipSyncCrypto.sha256(text)
+
+        if (!isManual && (ClipboardStateManager.isEcho(hash) || ClipboardStateManager.isAlreadySynced(hash))) {
+            Log.d(TAG, "broadcastText skipped: already synced or echo ($hash)")
+            return
+        }
+
+        val ws = activeWebSocket
+        if (ws == null || currentConnectionState != STATE_CONNECTED) {
+            Log.i(TAG, "WebSocket not connected. Buffered text for transmission upon connect.")
+            pendingOutboundText = text
+            if (!isExplicitlyStopped && secureStorage.hasCredentials() && currentConnectionState != STATE_CONNECTING) {
+                connectWebSocket()
+            }
+            return
+        }
 
         try {
-            val hash = ClipboardStateManager.markSent(text)
-
             val envelope = safeCrypto.encrypt(text)
             val envelopeJson = gson.toJson(envelope)
             val itemId = "android-${UUID.randomUUID()}"
@@ -348,20 +411,27 @@ class ClipSyncForegroundService : Service() {
                 add("item", gson.toJsonTree(syncItem))
             }
 
-            ws.send(msg.toString())
-            Log.i(TAG, "Successfully synced text to broker ($itemId, ${text.length} chars)")
+            val sent = ws.send(msg.toString())
+            if (sent) {
+                ClipboardStateManager.markSent(text)
+                pendingOutboundText = null
+                Log.i(TAG, "Successfully synced text to broker ($itemId, ${text.length} chars, hash=${hash.take(8)})")
 
-            val preview = if (text.length > 30) text.take(30) + "..." else text
-            updateNotification("Synced: $preview")
+                val preview = if (text.length > 30) text.take(30) + "..." else text
+                updateNotification("Synced: $preview")
 
-            // Also add locally to history
-            val broadcast = Intent(ACTION_ITEM_RECEIVED).apply {
-                putExtra("text", text)
-                putExtra("sourceApp", "$deviceLabel (You)")
-                putExtra("itemId", itemId)
-                putExtra("timestamp", System.currentTimeMillis())
+                // Also add locally to history
+                val broadcast = Intent(ACTION_ITEM_RECEIVED).apply {
+                    putExtra("text", text)
+                    putExtra("sourceApp", "$deviceLabel (You)")
+                    putExtra("itemId", itemId)
+                    putExtra("timestamp", System.currentTimeMillis())
+                }
+                sendBroadcast(broadcast)
+            } else {
+                Log.w(TAG, "ws.send returned false. Buffered text for reconnect.")
+                pendingOutboundText = text
             }
-            sendBroadcast(broadcast)
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to broadcast text: ${e.message}")
@@ -452,13 +522,18 @@ class ClipSyncForegroundService : Service() {
 
     override fun onDestroy() {
         isExplicitlyStopped = true
+        cancelScheduledReconnect()
         try {
             clipboardManager.removePrimaryClipChangedListener(clipListener)
         } catch (_: Exception) {}
         try {
             connectivityManager.unregisterNetworkCallback(networkCallback)
         } catch (_: Exception) {}
-        webSocket?.close(1000, "Service stopped")
+        val ws = activeWebSocket
+        activeWebSocket = null
+        try {
+            ws?.close(1000, "Service stopped")
+        } catch (_: Exception) {}
         broadcastConnectionState(STATE_DISCONNECTED)
         super.onDestroy()
     }
@@ -471,6 +546,7 @@ class ClipSyncForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
 
         const val EXTRA_OUTBOUND_TEXT = "extra_outbound_text"
+        const val EXTRA_IS_MANUAL = "extra_is_manual"
         const val EXTRA_RECONNECT = "extra_reconnect"
 
         const val ACTION_ITEM_RECEIVED = "com.clipsync.ITEM_RECEIVED"

@@ -78,6 +78,34 @@ object ClipboardStateManager {
         clearPending()
     }
 
+    /**
+     * Determines whether pending remote text should be auto-applied to the local clipboard.
+     * Prevents overwriting newer local clipboard content with stale remote updates.
+     */
+    @Synchronized
+    fun shouldApplyRemote(localClipTimestamp: Long, localText: String?): Boolean {
+        val remote = pendingRemoteText ?: return false
+        if (remote.isBlank()) return false
+
+        // If local clipboard already contains the remote text, mark applied and don't re-apply
+        if (localText == remote) {
+            markAppliedLocally(remote)
+            return false
+        }
+
+        // If local clip was copied AFTER remote text was received, local is newer!
+        if (localClipTimestamp > pendingRemoteTimestamp && !localText.isNullOrBlank()) {
+            val localHash = ClipSyncCrypto.sha256(localText)
+            // If local text is not an echo of remote, user copied something new locally
+            if (localHash != lastReceivedHash) {
+                clearPending()
+                return false
+            }
+        }
+
+        return true
+    }
+
     @Synchronized
     fun clearPending() {
         pendingRemoteText = null

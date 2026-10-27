@@ -276,4 +276,67 @@ class ClipSyncUnitTest {
         val wouldSync = !ClipboardStateManager.isEcho(userHash) && !ClipboardStateManager.isAlreadySynced(userHash)
         assertTrue("User copy of different text must be allowed to sync", wouldSync)
     }
+
+    @Test
+    fun testShouldApplyRemoteWhenRemoteIsNewer() {
+        val remoteText = "Mac clipboard snippet"
+        ClipboardStateManager.markReceived(remoteText, "MacBook Air", 5000L)
+
+        // Local clip timestamp is older (e.g. 3000L)
+        val shouldApply = ClipboardStateManager.shouldApplyRemote(
+            localClipTimestamp = 3000L,
+            localText = "Older local text"
+        )
+        assertTrue("Remote clip must be applied when it is newer than local clipboard", shouldApply)
+    }
+
+    @Test
+    fun testShouldNotApplyRemoteWhenLocalClipIsNewer() {
+        val remoteText = "Older remote snippet"
+        ClipboardStateManager.markReceived(remoteText, "MacBook Air", 5000L)
+
+        val newerLocalText = "Fresh user copy in Chrome"
+        // Local clip timestamp is newer (e.g. 7000L)
+        val shouldApply = ClipboardStateManager.shouldApplyRemote(
+            localClipTimestamp = 7000L,
+            localText = newerLocalText
+        )
+        assertFalse("Stale remote clip must NOT overwrite newer local clipboard", shouldApply)
+        assertNull("Stale pending remote text should be discarded", ClipboardStateManager.pendingRemoteText)
+
+        // And newer local text must be allowed to auto-sync to Mac
+        val localHash = ClipSyncCrypto.sha256(newerLocalText)
+        assertFalse("Newer local text must not be considered already synced", ClipboardStateManager.isAlreadySynced(localHash))
+        assertFalse("Newer local text must not be considered echo", ClipboardStateManager.isEcho(localHash))
+    }
+
+    @Test
+    fun testRedundantRemoteReapplySuppression() {
+        val remoteText = "Exact text already on clipboard"
+        ClipboardStateManager.markReceived(remoteText, "MacBook Air", 5000L)
+
+        // Local clipboard already matches remote text exactly
+        val shouldApply = ClipboardStateManager.shouldApplyRemote(
+            localClipTimestamp = 5000L,
+            localText = remoteText
+        )
+        assertFalse("Redundant re-application must be suppressed if clipboard already contains text", shouldApply)
+        assertNull("Pending remote text should be cleared once matched", ClipboardStateManager.pendingRemoteText)
+
+        val hash = ClipSyncCrypto.sha256(remoteText)
+        assertTrue("Matched text must be marked as already synced", ClipboardStateManager.isAlreadySynced(hash))
+    }
+
+    @Test
+    fun testUnsentOutboundNotPrematurelyMarkedSynced() {
+        val text = "Text waiting to be sent"
+        val hash = ClipSyncCrypto.sha256(text)
+
+        // Before successful transmission:
+        assertFalse("Unsent text must not be considered already synced before transmission succeeds", ClipboardStateManager.isAlreadySynced(hash))
+
+        // When transmission succeeds:
+        ClipboardStateManager.markSent(text)
+        assertTrue("Text must be marked as synced only after transmission succeeds", ClipboardStateManager.isAlreadySynced(hash))
+    }
 }
