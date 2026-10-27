@@ -22,6 +22,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.util.UUID
 import com.clipsync.android.R
 import com.clipsync.android.crypto.ClipSyncCrypto
 import com.clipsync.android.models.ClaimPairingResponse
@@ -179,6 +180,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        Log.i("MainActivity", "[SYNC-FLOW] onResume() called. hasWindowFocus=${hasWindowFocus()}")
         ClipboardStateManager.isAppInForeground = true
         try {
             clipboardManager.addPrimaryClipChangedListener(foregroundClipListener)
@@ -190,36 +192,30 @@ class MainActivity : AppCompatActivity() {
             startSyncService()
         }
 
-        if (hasWindowFocus()) {
-            mainHandler.post {
-                if (hasWindowFocus()) {
-                    checkAndProcessClipboardOnForeground()
-                }
-            }
+        mainHandler.post {
+            checkAndProcessClipboardOnForeground("onResume_post")
         }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        Log.i("MainActivity", "[SYNC-FLOW] onWindowFocusChanged(hasFocus=$hasFocus)")
         ClipboardStateManager.isAppInForeground = hasFocus
         if (hasFocus) {
             // Post to main looper to ensure WindowManager focus state is fully propagated
             mainHandler.post {
-                if (hasWindowFocus()) {
-                    checkAndProcessClipboardOnForeground()
-                }
+                checkAndProcessClipboardOnForeground("window_focus_immediate")
             }
-            // Fallback check after 200ms for OEM skins (MIUI/HyperOS) where clipboard focus lags
+            // Fallback check after 250ms for OEM skins (MIUI/HyperOS) where clipboard focus lags
             mainHandler.postDelayed({
-                if (hasWindowFocus()) {
-                    checkAndProcessClipboardOnForeground()
-                }
-            }, 200)
+                checkAndProcessClipboardOnForeground("window_focus_delayed_250ms")
+            }, 250)
         }
     }
 
     override fun onPause() {
         super.onPause()
+        Log.i("MainActivity", "[SYNC-FLOW] onPause() called")
         ClipboardStateManager.isAppInForeground = false
         try {
             clipboardManager.removePrimaryClipChangedListener(foregroundClipListener)
@@ -233,9 +229,11 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun checkAndProcessClipboardOnForeground() {
+    private fun checkAndProcessClipboardOnForeground(trigger: String = "unknown") {
+        val syncId = "SYNC-" + UUID.randomUUID().toString().take(6)
+        Log.i("MainActivity", "[$syncId] Clipboard inspection attempted (trigger=$trigger, hasWindowFocus=${hasWindowFocus()})")
         if (!hasWindowFocus()) {
-            Log.d("MainActivity", "checkAndProcessClipboardOnForeground skipped: window does not have focus")
+            Log.w("MainActivity", "[$syncId] Inspection aborted: window does not have focus")
             return
         }
 
@@ -243,15 +241,21 @@ class MainActivity : AppCompatActivity() {
         val clip = try {
             clipboardManager.primaryClip
         } catch (e: Exception) {
-            Log.w("MainActivity", "Failed to read primaryClip: ${e.message}")
+            Log.e("MainActivity", "[$syncId] Failed to read primaryClip: ${e.message}")
             null
         }
 
+        val hasClip = clip != null
+        val itemCount = clip?.itemCount ?: 0
+        val localText = if (hasClip && itemCount > 0) clip?.getItemAt(0)?.text?.toString() else null
+        val clipStatus = if (!hasClip) "null" else if (localText == null) "no_text" else if (localText.isEmpty()) "empty_text" else "text(len=${localText.length})"
         val localClipTimestamp = clip?.description?.timestamp ?: 0L
-        val localText = if (clip != null && clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
+        Log.i("MainActivity", "[$syncId] Clipboard state: status=$clipStatus, itemCount=$itemCount, timestamp=$localClipTimestamp")
 
         // 2. Check if pending remote text should be applied (ensuring local newer content is NOT overwritten)
-        if (ClipboardStateManager.shouldApplyRemote(localClipTimestamp, localText)) {
+        val shouldApply = ClipboardStateManager.shouldApplyRemote(localClipTimestamp, localText)
+        Log.d("MainActivity", "[$syncId] Pending remote evaluation: shouldApplyRemote=$shouldApply, hasPending=${ClipboardStateManager.pendingRemoteText != null}")
+        if (shouldApply) {
             val pending = ClipboardStateManager.pendingRemoteText
             val pendingSource = ClipboardStateManager.pendingRemoteSource ?: "Desktop"
             if (!pending.isNullOrBlank()) {
@@ -261,9 +265,9 @@ class MainActivity : AppCompatActivity() {
                     clipboardManager.setPrimaryClip(newClip)
                     val preview = if (pending.length > 25) pending.take(25) + "..." else pending
                     Toast.makeText(this, "ClipSync: Auto-applied from $pendingSource (\"$preview\")", Toast.LENGTH_SHORT).show()
-                    Log.i("MainActivity", "Auto-applied pending remote text from $pendingSource (${pending.length} chars)")
+                    Log.i("MainActivity", "[$syncId] Auto-applied pending remote text from $pendingSource (${pending.length} chars)")
                 } catch (e: Exception) {
-                    Log.w("MainActivity", "Auto-apply pending failed: ${e.message}")
+                    Log.w("MainActivity", "[$syncId] Auto-apply pending failed: ${e.message}")
                 }
                 return
             }
@@ -272,25 +276,36 @@ class MainActivity : AppCompatActivity() {
         // 3. Otherwise check if local clipboard has new text copied from another app
         if (!localText.isNullOrBlank()) {
             val hash = ClipSyncCrypto.sha256(localText)
-            if (ClipboardStateManager.isEcho(hash) || ClipboardStateManager.isAlreadySynced(hash)) {
-                Log.d("MainActivity", "Local clipboard content already synced or echo: len=${localText.length}, hash=${hash.take(8)}")
+            val isEcho = ClipboardStateManager.isEcho(hash)
+            val isAlreadySynced = ClipboardStateManager.isAlreadySynced(hash)
+            val lastSent = ClipboardStateManager.lastSentHash
+            val lastLocal = ClipboardStateManager.lastLocalHash
+            val lastReceived = ClipboardStateManager.lastReceivedHash
+            Log.i("MainActivity", "[$syncId] Hash evaluation: hash=${hash.take(8)}, isEcho=$isEcho, isAlreadySynced=$isAlreadySynced, lastSent=${lastSent.take(8)}, lastLocal=${lastLocal.take(8)}, lastReceived=${lastReceived.take(8)}")
+
+            if (isEcho || isAlreadySynced) {
+                Log.d("MainActivity", "[$syncId] Local clipboard skipped: already synced or echo")
                 return
             }
 
-            Log.i("MainActivity", "New external clipboard copy detected: len=${localText.length}, hash=${hash.take(8)}. Auto-syncing to desktop.")
+            Log.i("MainActivity", "[$syncId] Automatic sync request dispatched to ForegroundService (len=${localText.length}, hash=${hash.take(8)})")
             val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
                 putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, localText)
+                putExtra(ClipSyncForegroundService.EXTRA_SYNC_ID, syncId)
             }
             ContextCompat.startForegroundService(this, intent)
 
             val preview = if (localText.length > 25) localText.take(25) + "..." else localText
             Toast.makeText(this, "ClipSync: Auto-synced clipboard (\"$preview\")", Toast.LENGTH_SHORT).show()
+        } else {
+            Log.d("MainActivity", "[$syncId] Local clipboard empty or blank, nothing to sync")
         }
     }
 
     private fun onForegroundClipboardChanged() {
+        Log.i("MainActivity", "[SYNC-FLOW] onForegroundClipboardChanged (listener fired)")
         if (!hasWindowFocus()) return
-        checkAndProcessClipboardOnForeground()
+        checkAndProcessClipboardOnForeground("clip_changed_listener")
     }
 
     private fun initViews() {
@@ -423,25 +438,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun syncCurrentClipboard() {
+        val syncId = "MANUAL-" + UUID.randomUUID().toString().take(6)
+        Log.i("MainActivity", "[$syncId] Manual sync requested by user")
         try {
             val clip = clipboardManager.primaryClip
-            if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).text?.toString()
-                if (!text.isNullOrBlank()) {
-                    val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
-                        putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
-                        putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
-                    }
-                    ContextCompat.startForegroundService(this, intent)
-                    val preview = if (text.length > 30) text.take(30) + "..." else text
-                    Toast.makeText(this, "Syncing clipboard: \"$preview\"", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+            val hasClip = clip != null
+            val itemCount = clip?.itemCount ?: 0
+            val text = if (hasClip && itemCount > 0) clip?.getItemAt(0)?.text?.toString() else null
+            val clipStatus = if (!hasClip) "null" else if (text == null) "no_text" else if (text.isEmpty()) "empty_text" else "text(len=${text.length})"
+            Log.i("MainActivity", "[$syncId] Manual sync clipboard state: status=$clipStatus, itemCount=$itemCount")
+
+            if (!text.isNullOrBlank()) {
+                val hash = ClipSyncCrypto.sha256(text)
+                Log.i("MainActivity", "[$syncId] Manual sync request dispatched to ForegroundService (len=${text.length}, hash=${hash.take(8)})")
+                val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                    putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
+                    putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
+                    putExtra(ClipSyncForegroundService.EXTRA_SYNC_ID, syncId)
                 }
+                ContextCompat.startForegroundService(this, intent)
+                val preview = if (text.length > 30) text.take(30) + "..." else text
+                Toast.makeText(this, "Syncing clipboard: \"$preview\"", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
+            Log.e("MainActivity", "[$syncId] Manual sync clipboard error: ${e.message}")
             Toast.makeText(this, "Clipboard error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }

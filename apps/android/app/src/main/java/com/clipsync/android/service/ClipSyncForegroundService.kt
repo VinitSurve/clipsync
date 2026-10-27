@@ -116,11 +116,12 @@ class ClipSyncForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
+            val syncId = it.getStringExtra(EXTRA_SYNC_ID) ?: ("SVC-" + UUID.randomUUID().toString().take(6))
             if (it.hasExtra(EXTRA_OUTBOUND_TEXT)) {
                 val outbound = it.getStringExtra(EXTRA_OUTBOUND_TEXT)
                 if (!outbound.isNullOrBlank()) {
                     val isManual = it.getBooleanExtra(EXTRA_IS_MANUAL, false)
-                    broadcastText(outbound, isManual = isManual)
+                    broadcastText(outbound, isManual = isManual, syncId = syncId)
                 }
             }
 
@@ -202,8 +203,9 @@ class ClipSyncForegroundService : Service() {
                 // Flush pending outbound text if queued while disconnected
                 val pending = pendingOutboundText
                 if (!pending.isNullOrBlank()) {
-                    Log.i(TAG, "Flushing pending outbound text on connect: len=${pending.length}")
-                    broadcastText(pending)
+                    val flushSyncId = "FLUSH-" + UUID.randomUUID().toString().take(6)
+                    Log.i(TAG, "[$flushSyncId] Flushing pending outbound text on connect: len=${pending.length}")
+                    broadcastText(pending, isManual = false, syncId = flushSyncId)
                 }
             }
 
@@ -255,6 +257,13 @@ class ClipSyncForegroundService : Service() {
             val json = gson.fromJson(rawJson, JsonObject::class.java) ?: return
             val type = json.get("type")?.asString ?: return
 
+            if (type == "sync:ack" || type == "ack") {
+                val ackItemId = json.get("itemId")?.asString ?: ""
+                val seq = json.get("sequenceNumber")?.asInt ?: 0
+                Log.i(TAG, "[ACK] Server acknowledged item: itemId=$ackItemId, seq=$seq")
+                return
+            }
+
             if (type == "sync:item") {
                 val itemObj = json.getAsJsonObject("item") ?: return
                 val seq = json.get("sequenceNumber")?.asInt ?: 0
@@ -271,6 +280,7 @@ class ClipSyncForegroundService : Service() {
 
                 // 2. Loop & duplicate suppression
                 if (sourceDeviceId.isNotEmpty() && sourceDeviceId == secureStorage.deviceId) {
+                    Log.d(TAG, "[ACK] Server forwarded our own item echo: itemId=$itemId (sourceDeviceId=$sourceDeviceId)")
                     return // Echo of item sent by this device
                 }
                 if (itemId.isNotEmpty()) {
@@ -360,19 +370,25 @@ class ClipSyncForegroundService : Service() {
         }
     }
 
-    fun broadcastText(text: String, isManual: Boolean = false) {
+    fun broadcastText(text: String, isManual: Boolean = false, syncId: String = "") {
+        val corrId = if (syncId.isNotEmpty()) syncId else ("SVC-" + UUID.randomUUID().toString().take(6))
         if (crypto == null) initCrypto()
         val safeCrypto = crypto ?: return
         val hash = ClipSyncCrypto.sha256(text)
 
+        Log.i(TAG, "[$corrId] Foreground service received broadcast request: isManual=$isManual, len=${text.length}, hash=${hash.take(8)}")
+
         if (!isManual && (ClipboardStateManager.isEcho(hash) || ClipboardStateManager.isAlreadySynced(hash))) {
-            Log.d(TAG, "broadcastText skipped: already synced or echo ($hash)")
+            Log.d(TAG, "[$corrId] broadcastText skipped: already synced or echo (hash=${hash.take(8)}, isEcho=${ClipboardStateManager.isEcho(hash)}, isAlreadySynced=${ClipboardStateManager.isAlreadySynced(hash)})")
             return
         }
 
         val ws = activeWebSocket
-        if (ws == null || currentConnectionState != STATE_CONNECTED) {
-            Log.i(TAG, "WebSocket not connected. Buffered text for transmission upon connect.")
+        val isConnected = ws != null && currentConnectionState == STATE_CONNECTED
+        Log.i(TAG, "[$corrId] WebSocket state: wsConnected=$isConnected, state=$currentConnectionState")
+
+        if (!isConnected || ws == null) {
+            Log.i(TAG, "[$corrId] WebSocket not connected ($currentConnectionState). Buffered text for transmission upon connect.")
             pendingOutboundText = text
             if (!isExplicitlyStopped && secureStorage.hasCredentials() && currentConnectionState != STATE_CONNECTING) {
                 connectWebSocket()
@@ -411,11 +427,13 @@ class ClipSyncForegroundService : Service() {
                 add("item", gson.toJsonTree(syncItem))
             }
 
+            Log.i(TAG, "[$corrId] Outbound message queued: itemId=$itemId, hash=${hash.take(8)}")
             val sent = ws.send(msg.toString())
+            Log.i(TAG, "[$corrId] WebSocket send result: sent=$sent")
             if (sent) {
                 ClipboardStateManager.markSent(text)
                 pendingOutboundText = null
-                Log.i(TAG, "Successfully synced text to broker ($itemId, ${text.length} chars, hash=${hash.take(8)})")
+                Log.i(TAG, "[$corrId] Successfully synced text to broker ($itemId, ${text.length} chars, hash=${hash.take(8)})")
 
                 val preview = if (text.length > 30) text.take(30) + "..." else text
                 updateNotification("Synced: $preview")
@@ -429,12 +447,12 @@ class ClipSyncForegroundService : Service() {
                 }
                 sendBroadcast(broadcast)
             } else {
-                Log.w(TAG, "ws.send returned false. Buffered text for reconnect.")
+                Log.w(TAG, "[$corrId] ws.send returned false. Buffered text for reconnect.")
                 pendingOutboundText = text
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to broadcast text: ${e.message}")
+            Log.e(TAG, "[$corrId] Failed to broadcast text: ${e.message}")
         }
     }
 
@@ -548,6 +566,7 @@ class ClipSyncForegroundService : Service() {
         const val EXTRA_OUTBOUND_TEXT = "extra_outbound_text"
         const val EXTRA_IS_MANUAL = "extra_is_manual"
         const val EXTRA_RECONNECT = "extra_reconnect"
+        const val EXTRA_SYNC_ID = "extra_sync_id"
 
         const val ACTION_ITEM_RECEIVED = "com.clipsync.ITEM_RECEIVED"
         const val ACTION_CONNECTION_STATE = "com.clipsync.CONNECTION_STATE"

@@ -339,4 +339,23 @@ class ClipSyncUnitTest {
         ClipboardStateManager.markSent(text)
         assertTrue("Text must be marked as synced only after transmission succeeds", ClipboardStateManager.isAlreadySynced(hash))
     }
+
+    @Test
+    fun testShouldNotApplyRemoteWhenTimestampZeroAndLocalIsFreshCopy() {
+        val initialText = "Initial local copy"
+        ClipboardStateManager.markSent(initialText)
+
+        val remoteText = "Mac clipboard item"
+        ClipboardStateManager.markReceived(remoteText, "MacBook Air", 5000L)
+
+        // Local timestamp is 0 (unavailable), but user copied fresh text locally
+        val freshLocalText = "Fresh copy in Android Chrome"
+        val shouldApply = ClipboardStateManager.shouldApplyRemote(
+            localClipTimestamp = 0L,
+            localText = freshLocalText
+        )
+
+        assertFalse("Stale remote text must NOT overwrite fresh local copy even if timestamp is 0", shouldApply)
+        assertNull("Stale pending remote text should be discarded", ClipboardStateManager.pendingRemoteText)
+    }
 }

@@ -103,6 +103,15 @@ object ClipboardStateManager {
             }
         }
 
+        // Fallback for devices/apps where localClipTimestamp is 0 (not provided by OS):
+        if (localClipTimestamp == 0L && !localText.isNullOrBlank()) {
+            val localHash = ClipSyncCrypto.sha256(localText)
+            if (lastLocalHash.isNotEmpty() && localHash != lastLocalHash && localHash != lastReceivedHash) {
+                clearPending()
+                return false
+            }
+        }
+
         return true
     }
 
