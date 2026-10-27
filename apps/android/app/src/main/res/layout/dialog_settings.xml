@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Server URL"
+            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/editServerUrl"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="https://clipsync-worker.survevinit56.workers.dev"
+            android:inputType="textUri"
+            android:textSize="14sp"
+            android:background="@drawable/shape_edittext_border"
+            android:paddingHorizontal="12dp"
+            android:layout_marginBottom="12dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sync Passphrase (E2E Encryption)"
+            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/editPassphrase"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Passphrase matching Mac and Windows"
+            android:inputType="textPassword"
+            android:textSize="14sp"
+            android:background="@drawable/shape_edittext_border"
+            android:paddingHorizontal="12dp"
+            android:layout_marginBottom="12dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Device Name"
+            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/editDeviceLabel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Redmi 10 Prime"
+            android:inputType="text"
+            android:textSize="14sp"
+            android:background="@drawable/shape_edittext_border"
+            android:paddingHorizontal="12dp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- MIUI / Redmi Advisory -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardCornerRadius="8dp"
+            app:cardElevation="0dp"
+            app:strokeWidth="1dp"
+            app:strokeColor="@color/border_color"
+            app:cardBackgroundColor="@color/brand_green_light"
+            android:layout_marginBottom="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Xiaomi / Redmi (MIUI) Tip:"
+                    android:textStyle="bold"
+                    android:textColor="@color/brand_green_dark"
+                    android:textSize="12sp"
+                    android:layout_marginBottom="4dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="For continuous connection, enable 'Autostart' and set Battery Saver to 'No restrictions' in App Info."
+                    android:textColor="@color/brand_green_dark"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+    </LinearLayout>
+</ScrollView>

@@ -1,11 +1,12 @@
 package com.clipsync.android.tile
 
+import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.annotation.RequiresApi
-import com.clipsync.android.service.ClipSyncForegroundService
+import com.clipsync.android.ui.ClipSyncCaptureActivity
 
 @RequiresApi(Build.VERSION_CODES.N)
 class ClipSyncTileService : TileService() {
@@ -20,14 +21,19 @@ class ClipSyncTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        // Trigger immediate clipboard capture and sync
-        val serviceIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
-            putExtra("action_sync_now", true)
+        val intent = Intent(this, ClipSyncCaptureActivity::class.java).apply {
+            action = ClipSyncCaptureActivity.ACTION_CAPTURE_AND_SYNC
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val pendingIntent = PendingIntent.getActivity(
+                this, 0, intent, PendingIntent.FLAG_IMMUTABLE
+            )
+            startActivityAndCollapse(pendingIntent)
         } else {
-            startService(serviceIntent)
+            @Suppress("DEPRECATION")
+            startActivityAndCollapse(intent)
         }
     }
 }

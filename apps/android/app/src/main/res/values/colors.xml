@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_green">#107C41</color>
+    <color name="brand_green_dark">#0B5A2F</color>
+    <color name="brand_green_light">#E8F5E9</color>
+    <color name="background">#F6F8FA</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="text_primary">#1F2328</color>
+    <color name="text_secondary">#656D76</color>
+    <color name="border_color">#D0D7DE</color>
+    <color name="status_connected">#1A7F37</color>
+    <color name="status_connecting">#9A6700</color>
+    <color name="status_disconnected">#CF222E</color>
+    <color name="danger_red">#CF222E</color>
+</resources>

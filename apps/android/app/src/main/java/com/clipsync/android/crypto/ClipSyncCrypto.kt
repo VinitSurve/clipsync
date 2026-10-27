@@ -1,6 +1,5 @@
 package com.clipsync.android.crypto
 
-import android.util.Base64
 import com.clipsync.android.models.EncryptedPayloadEnvelope
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -75,11 +74,11 @@ class ClipSyncCrypto(passphrase: String, salt: String) {
         }
 
         fun toBase64Url(bytes: ByteArray): String {
-            return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+            return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
         }
 
         fun fromBase64Url(input: String): ByteArray {
-            return Base64.decode(input, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+            return java.util.Base64.getUrlDecoder().decode(input)
         }
     }
 }

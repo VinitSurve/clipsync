@@ -39,6 +39,18 @@ data class DeviceInfo(
     @SerializedName("isCurrent") val isCurrent: Boolean? = null
 )
 
+data class DeviceListResponse(
+    @SerializedName("devices") val devices: List<DeviceInfo>
+)
+
+data class PairingSessionResponse(
+    @SerializedName("sessionId") val sessionId: String,
+    @SerializedName("code") val code: String,
+    @SerializedName("qrData") val qrData: String? = null,
+    @SerializedName("expiresAt") val expiresAt: String? = null,
+    @SerializedName("syncSalt") val syncSalt: String? = null
+)
+
 data class RegisterDeviceResponse(
     @SerializedName("deviceId") val deviceId: String,
     @SerializedName("token") val token: String,
@@ -56,3 +68,4 @@ data class ClaimPairingResponse(
     @SerializedName("platform") val platform: String,
     @SerializedName("syncSalt") val syncSalt: String
 )
+

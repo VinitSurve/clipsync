@@ -14,7 +14,7 @@
         android:label="ClipSync"
         android:roundIcon="@android:drawable/ic_menu_agenda"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Material3.DayNight.NoActionBar"
+        android:theme="@style/Theme.ClipSync"
         android:usesCleartextTraffic="true">
 
         <activity
@@ -31,6 +31,13 @@
                 <data android:scheme="clipsync" android:host="pair" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ui.ClipSyncCaptureActivity"
+            android:theme="@style/Theme.ClipSync.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true" />
 
         <service
             android:name=".service.ClipSyncForegroundService"

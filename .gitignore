@@ -44,6 +44,7 @@ obj/
 # Android / Gradle
 .gradle/
 local.properties
+**/build/
 *.apk
 *.aab
 .idea/

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Enter the 6-digit pairing code shown on your Mac or Windows PC:"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp"
+        android:layout_marginBottom="12dp" />
+
+    <EditText
+        android:id="@+id/editPairCode"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:hint="123456"
+        android:inputType="number"
+        android:maxLength="6"
+        android:textAlignment="center"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.2"
+        android:background="@drawable/shape_edittext_border"
+        android:paddingHorizontal="16dp"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Or generate a code on this phone to enter into Mac/PC:"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp"
+        android:layout_marginBottom="8dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnGenerateSession"
+        style="@style/Widget.Material3.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Generate Code on This Phone"
+        android:textColor="@color/brand_green" />
+
+    <TextView
+        android:id="@+id/txtGeneratedCode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textAlignment="center"
+        android:textSize="26sp"
+        android:textStyle="bold"
+        android:textColor="@color/brand_green_dark"
+        android:visibility="gone"
+        android:padding="12dp" />
+
+</LinearLayout>
