@@ -466,8 +466,79 @@ public static class WindowsUnitTests
         }
         Console.WriteLine("  [PASS] Google Cloud Project isolation and foreign credential auto-discovery rejection verified");
 
+        // ---------------------------------------------------------------------
+        // Test 24: Google Drive Disconnected Error Formatting and Transfer Record Guards
+        // ---------------------------------------------------------------------
+        string dlErr = TransferHelpers.FormatDisconnectedDriveError("downloading");
+        AssertTrue(dlErr.Contains("disconnected", StringComparison.OrdinalIgnoreCase), "Must mention disconnected");
+        AssertTrue(dlErr.Contains("Settings"), "Must guide user to Settings");
+
+        string retryErr = TransferHelpers.FormatDisconnectedDriveError("retrying");
+        AssertTrue(retryErr.Contains("disconnected", StringComparison.OrdinalIgnoreCase), "Must mention disconnected");
+        AssertTrue(retryErr.Contains("retrying", StringComparison.OrdinalIgnoreCase), "Must mention retrying");
+
+        string remediation = TransferHelpers.FormatDisconnectedRemediation("Disconnected");
+        AssertTrue(remediation.Contains("Disconnected"), "Must mention current status");
+        AssertTrue(remediation.Contains("Google Drive & System"), "Must direct user to Google Drive & System tab");
+        AssertTrue(remediation.Contains("Connect Google Drive"), "Must guide user to Connect Google Drive button");
+
+        // Verify incoming transfer record created when disconnected
+        var disconnectedRecord = new TransferRecord(
+            id: "disc-rec-001",
+            fileName: "TestClipboard.png",
+            fileSizeBytes: 2048,
+            mimeType: "image/png",
+            isOutgoing: false,
+            status: TransferStatus.Failed,
+            statusText: $"Delivery failed: {retryErr}",
+            manifest: manifest,
+            errorDetails: remediation
+        );
+        AssertEqual(TransferStatus.Failed, disconnectedRecord.Status);
+        AssertTrue(disconnectedRecord.CanRetry, "Disconnected transfer failure must be retryable");
+        AssertTrue(disconnectedRecord.Manifest != null, "Manifest must be preserved for retry once connected");
+        AssertTrue(disconnectedRecord.StatusText.Contains("disconnected", StringComparison.OrdinalIgnoreCase), "StatusText must be explicit");
+        AssertTrue(disconnectedRecord.ErrorDetails!.Contains("Connect Google Drive"), "ErrorDetails must provide remediation");
+
+        // Verify credential replacement lifecycle in SecureTokenStorage
+        string rotTempDir = Path.Combine(Path.GetTempPath(), "clipsync-rot-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(rotTempDir);
+            var rotStorage = new SecureTokenStorage(rotTempDir);
+            rotStorage.SaveToken("google_client_id", "469960524475-old.apps.googleusercontent.com");
+            rotStorage.SaveToken("google_refresh_token", "stale-old-refresh-token");
+            rotStorage.SaveToken("google_account_email", "old@example.com");
+
+            string newCredsFile = Path.Combine(rotTempDir, "credentials.json");
+            string newCredsJson = @"{
+                ""installed"": {
+                    ""client_id"": ""469960524475-new.apps.googleusercontent.com"",
+                    ""client_secret"": ""GOCSPX-newSecret"",
+                    ""project_id"": ""clipsync-512808""
+                }
+            }";
+            File.WriteAllText(newCredsFile, newCredsJson);
+
+            var (rotCid, rotSec, rotProj) = rotStorage.AutoImportCredentialsJson(newCredsFile);
+            AssertEqual("469960524475-new.apps.googleusercontent.com", rotCid);
+            AssertEqual("GOCSPX-newSecret", rotSec);
+            AssertEqual("clipsync-512808", rotProj);
+
+            // Deleting stale refresh token upon credential rotation
+            rotStorage.DeleteToken("google_refresh_token");
+            rotStorage.DeleteToken("google_account_email");
+            AssertTrue(string.IsNullOrEmpty(rotStorage.GetToken("google_refresh_token")), "Old refresh token must be wiped");
+            AssertTrue(string.IsNullOrEmpty(rotStorage.GetToken("google_account_email")), "Old account email must be wiped");
+        }
+        finally
+        {
+            try { Directory.Delete(rotTempDir, true); } catch { }
+        }
+        Console.WriteLine("  [PASS] Google Drive disconnected error formatting, record guards, and token rotation verified");
+
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("\n[SUCCESS] ALL 23 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
+        Console.WriteLine("\n[SUCCESS] ALL 24 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
         Console.ResetColor();
     }
 }

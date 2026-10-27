@@ -88,7 +88,11 @@ public sealed class GoogleDriveService
 
     public (string? ClientId, string? ClientSecret, string? ProjectId) ImportCredentialsFile(string path)
     {
+        string? oldClientId = ClientId;
         var result = _tokenStorage.AutoImportCredentialsJson(path);
+        bool clientIdChanged = !string.IsNullOrEmpty(result.ClientId) &&
+                               !string.Equals(result.ClientId, oldClientId, StringComparison.Ordinal);
+
         if (!string.IsNullOrEmpty(result.ClientId))
         {
             ClientId = result.ClientId;
@@ -97,6 +101,13 @@ public sealed class GoogleDriveService
         {
             ClientSecret = result.ClientSecret;
         }
+
+        // If client ID changed, old tokens from previous client are invalid
+        if (clientIdChanged)
+        {
+            Disconnect();
+        }
+
         OnAuthStatusChanged?.Invoke();
         return result;
     }
@@ -441,6 +452,27 @@ public sealed class GoogleDriveService
 
         try
         {
+            // 1. Query Drive API /about endpoint (works natively with drive.file scope)
+            using var driveReq = new HttpRequestMessage(HttpMethod.Get, "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)");
+            driveReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            using var driveRes = await _httpClient.SendAsync(driveReq, ct);
+            if (driveRes.IsSuccessStatusCode)
+            {
+                string json = await driveRes.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("user", out var userProp) &&
+                    userProp.TryGetProperty("emailAddress", out var emailProp))
+                {
+                    return emailProp.GetString();
+                }
+            }
+        }
+        catch { }
+
+        try
+        {
+            // 2. Fallback to oauth2 userinfo endpoint
             using var req = new HttpRequestMessage(HttpMethod.Get, UserInfoEndpoint);
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 

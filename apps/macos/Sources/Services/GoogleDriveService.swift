@@ -431,6 +431,20 @@ public final class GoogleDriveService: NSObject, ObservableObject {
     }
 
     private func fetchUserEmail(accessToken: String) async -> String? {
+        // 1. Try Google Drive API /about endpoint (works natively with drive.file scope)
+        if let aboutUrl = URL(string: "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)") {
+            var aboutReq = URLRequest(url: aboutUrl)
+            aboutReq.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            if let (data, response) = try? await URLSession.shared.data(for: aboutReq),
+               let http = response as? HTTPURLResponse, http.statusCode == 200,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let user = json["user"] as? [String: Any],
+               let email = user["emailAddress"] as? String {
+                return email
+            }
+        }
+
+        // 2. Fallback to oauth2 userinfo endpoint
         guard let url = URL(string: "https://www.googleapis.com/oauth2/v2/userinfo") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")

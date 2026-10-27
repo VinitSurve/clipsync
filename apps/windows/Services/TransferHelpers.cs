@@ -139,4 +139,14 @@ public static class TransferHelpers
 
         return $"Download failed (HTTP {(int)statusCode})";
     }
+
+    public static string FormatDisconnectedDriveError(string action)
+    {
+        return $"Google Drive is disconnected. Connect in Settings before {action}.";
+    }
+
+    public static string FormatDisconnectedRemediation(string currentStatus)
+    {
+        return $"Google Drive auth status is {currentStatus}. Please open Settings -> 'Google Drive & System' tab, click 'Connect Google Drive', and sign in before retrying.";
+    }
 }

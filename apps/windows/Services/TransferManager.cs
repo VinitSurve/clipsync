@@ -435,6 +435,26 @@ public sealed class TransferManager
             return;
         }
 
+        if (!_googleDrive.IsConnected)
+        {
+            string notConnErr = "Google Drive is disconnected. Connect in Settings before downloading.";
+            LogTransferDiagnostic(manifest.TransferId, "DownloadSkipped", notConnErr);
+            var errRecord = new TransferRecord(
+                id: manifest.TransferId,
+                fileName: manifest.FileName,
+                fileSizeBytes: manifest.FileSizeBytes,
+                mimeType: manifest.MimeType,
+                isOutgoing: false,
+                status: TransferStatus.Failed,
+                statusText: $"Delivery failed: {notConnErr}",
+                manifest: manifest,
+                driveFileId: driveFileId,
+                errorDetails: $"Google Drive auth status is {_googleDrive.Status}. Please open Settings -> 'Google Drive & System' tab, click 'Connect Google Drive', and sign in before downloading."
+            );
+            InsertOrUpdateRecord(errRecord);
+            return;
+        }
+
         var record = new TransferRecord(
             id: manifest.TransferId,
             fileName: manifest.FileName,
@@ -734,6 +754,17 @@ public sealed class TransferManager
         }
         else if (!record.IsOutgoing && record.Manifest != null)
         {
+            if (!_googleDrive.IsConnected)
+            {
+                string notConnErr = "Google Drive is disconnected. Connect in Settings before retrying.";
+                LogTransferDiagnostic(record.Id, "RetryFailed", notConnErr);
+                record.Status = TransferStatus.Failed;
+                record.StatusText = $"Delivery failed: {notConnErr}";
+                record.ErrorDetails = $"Google Drive auth status is {_googleDrive.Status}. Please open Settings -> 'Google Drive & System' tab, click 'Connect Google Drive', and sign in before retrying.";
+                OnTransfersChanged?.Invoke();
+                return;
+            }
+
             // Re-attempt incoming transfer
             LogTransferDiagnostic(record.Id, "Retry", $"User retrying incoming transfer for '{record.FileName}'.");
             record.Status = TransferStatus.Downloading;

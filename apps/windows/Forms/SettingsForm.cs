@@ -45,6 +45,7 @@ public sealed class SettingsForm : Form
     private Button _clearCompletedTransfersButton = null!;
     private Button _openDownloadsButton = null!;
     private Label _transfersStatusLabel = null!;
+    private TabControl _tabControl = null!;
 
     private readonly string _deviceId;
     private readonly string _token;
@@ -97,7 +98,7 @@ public sealed class SettingsForm : Form
         Font = new Font("Segoe UI", 9.25f);
         BackColor = Color.FromArgb(246, 248, 250);
 
-        var tabControl = new TabControl
+        _tabControl = new TabControl
         {
             Dock = DockStyle.Fill,
             Padding = new Point(14, 8),
@@ -107,24 +108,24 @@ public sealed class SettingsForm : Form
         // Tab 1: Server & Connection
         var tabConnection = new TabPage("Server & Connection") { BackColor = Color.White };
         BuildConnectionTab(tabConnection, currentServerUrl, currentPassphrase, currentDeviceLabel, currentConnectionState, lastStatusDetail);
-        tabControl.TabPages.Add(tabConnection);
+        _tabControl.TabPages.Add(tabConnection);
 
         // Tab 2: Devices & Pairing
         var tabDevices = new TabPage("Devices & Pairing") { BackColor = Color.White };
         BuildDevicesTab(tabDevices, currentDeviceId, currentDeviceLabel);
-        tabControl.TabPages.Add(tabDevices);
+        _tabControl.TabPages.Add(tabDevices);
 
         // Tab 3: Google Drive & System
         var tabSystem = new TabPage("Google Drive & System") { BackColor = Color.White };
         BuildSystemTab(tabSystem, isStartupEnabled);
-        tabControl.TabPages.Add(tabSystem);
+        _tabControl.TabPages.Add(tabSystem);
 
         // Tab 4: Transfers
         var tabTransfers = new TabPage("Transfers") { BackColor = Color.White };
         BuildTransfersTab(tabTransfers);
-        tabControl.TabPages.Add(tabTransfers);
+        _tabControl.TabPages.Add(tabTransfers);
 
-        Controls.Add(tabControl);
+        Controls.Add(_tabControl);
 
         // Load devices list in background
         _ = LoadDevicesAsync(currentServerUrl);
@@ -724,6 +725,23 @@ public sealed class SettingsForm : Form
         {
             if (_transfersListView.SelectedItems.Count > 0)
             {
+                if (_googleDrive?.Status != GoogleDriveAuthStatus.Connected)
+                {
+                    var res = MessageBox.Show(this,
+                        "Google Drive is currently disconnected.\n\n" +
+                        "ClipSync requires an active Google Drive connection to download or retry encrypted transfers.\n\n" +
+                        "Would you like to open the 'Google Drive & System' tab to connect now?",
+                        "Google Drive Disconnected",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+
+                    if (res == DialogResult.Yes && _tabControl != null)
+                    {
+                        _tabControl.SelectedIndex = 2;
+                    }
+                    return;
+                }
+
                 string? tid = _transfersListView.SelectedItems[0].Tag as string;
                 if (!string.IsNullOrEmpty(tid)) _transferManager?.RetryTransfer(tid);
             }
@@ -922,6 +940,24 @@ public sealed class SettingsForm : Form
         };
         btnRetryModal.Click += (_, _) =>
         {
+            if (_googleDrive?.Status != GoogleDriveAuthStatus.Connected)
+            {
+                var res = MessageBox.Show(detailsDialog,
+                    "Google Drive is currently disconnected.\n\n" +
+                    "ClipSync requires an active Google Drive connection to download or retry encrypted transfers.\n\n" +
+                    "Would you like to open the 'Google Drive & System' tab to connect now?",
+                    "Google Drive Disconnected",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+
+                if (res == DialogResult.Yes && _tabControl != null)
+                {
+                    detailsDialog.Close();
+                    _tabControl.SelectedIndex = 2;
+                }
+                return;
+            }
+
             _transferManager.RetryTransfer(record.Id);
             detailsDialog.Close();
         };
@@ -1048,11 +1084,20 @@ public sealed class SettingsForm : Form
                     }
                     else
                     {
-                        MessageBox.Show(this,
-                            $"Credentials successfully imported!\n\nProject ID: {projectInfo}\nClient ID: {previewCid}\nClient Secret: {secretStatus}",
-                            "ClipSync - Credentials Imported",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information);
+                        var dr = MessageBox.Show(this,
+                            $"Credentials successfully imported!\n\n" +
+                            $"Project ID: {projectInfo}\n" +
+                            $"Client ID: {previewCid}\n" +
+                            $"Client Secret: {secretStatus}\n\n" +
+                            "Would you like to connect to Google Drive now to complete authorization?",
+                            "ClipSync - Connect to Google Drive",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question);
+
+                        if (dr == DialogResult.Yes)
+                        {
+                            _googleConnectButton.PerformClick();
+                        }
                     }
                 }
                 else
