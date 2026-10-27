@@ -5,6 +5,7 @@ using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -39,6 +40,7 @@ public sealed class SettingsForm : Form
     // Transfers controls
     private ListView _transfersListView = null!;
     private Button _retryTransferButton = null!;
+    private Button _viewDetailsButton = null!;
     private Button _cancelTransferButton = null!;
     private Button _clearCompletedTransfersButton = null!;
     private Button _openDownloadsButton = null!;
@@ -693,11 +695,13 @@ public sealed class SettingsForm : Form
             GridLines = true,
             Font = new Font("Segoe UI", 9f, FontStyle.Regular)
         };
-        _transfersListView.Columns.Add("File Name", 160);
-        _transfersListView.Columns.Add("Type", 65);
-        _transfersListView.Columns.Add("Size", 70);
+        _transfersListView.Columns.Add("File Name", 145);
+        _transfersListView.Columns.Add("Type", 55);
+        _transfersListView.Columns.Add("Size", 65);
         _transfersListView.Columns.Add("Direction", 65);
-        _transfersListView.Columns.Add("Status", 115);
+        _transfersListView.Columns.Add("Status", 215);
+        _transfersListView.SelectedIndexChanged += (_, _) => OnTransferSelectionChanged();
+        _transfersListView.DoubleClick += (_, _) => ShowSelectedTransferDetails();
 
         _transfersStatusLabel = new Label
         {
@@ -712,7 +716,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Retry",
             Location = new Point(16, 420),
-            Size = new Size(80, 30),
+            Size = new Size(70, 30),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
@@ -725,11 +729,21 @@ public sealed class SettingsForm : Form
             }
         };
 
+        _viewDetailsButton = new Button
+        {
+            Text = "Details...",
+            Location = new Point(92, 420),
+            Size = new Size(82, 30),
+            Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+            Cursor = Cursors.Hand
+        };
+        _viewDetailsButton.Click += (_, _) => ShowSelectedTransferDetails();
+
         _cancelTransferButton = new Button
         {
             Text = "Cancel",
-            Location = new Point(102, 420),
-            Size = new Size(80, 30),
+            Location = new Point(180, 420),
+            Size = new Size(72, 30),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
@@ -745,8 +759,8 @@ public sealed class SettingsForm : Form
         _clearCompletedTransfersButton = new Button
         {
             Text = "Clear Finished",
-            Location = new Point(188, 420),
-            Size = new Size(110, 30),
+            Location = new Point(258, 420),
+            Size = new Size(104, 30),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
@@ -755,8 +769,8 @@ public sealed class SettingsForm : Form
         _openDownloadsButton = new Button
         {
             Text = "Open Downloads",
-            Location = new Point(354, 420),
-            Size = new Size(150, 30),
+            Location = new Point(368, 420),
+            Size = new Size(136, 30),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
             Cursor = Cursors.Hand
         };
@@ -770,12 +784,154 @@ public sealed class SettingsForm : Form
         grpTransfers.Controls.Add(_transfersListView);
         grpTransfers.Controls.Add(_transfersStatusLabel);
         grpTransfers.Controls.Add(_retryTransferButton);
+        grpTransfers.Controls.Add(_viewDetailsButton);
         grpTransfers.Controls.Add(_cancelTransferButton);
         grpTransfers.Controls.Add(_clearCompletedTransfersButton);
         grpTransfers.Controls.Add(_openDownloadsButton);
 
         panel.Controls.Add(grpTransfers);
         page.Controls.Add(panel);
+    }
+
+    private void OnTransferSelectionChanged()
+    {
+        if (_transfersListView.SelectedItems.Count > 0 && _transferManager != null)
+        {
+            string? tid = _transfersListView.SelectedItems[0].Tag as string;
+            var record = _transferManager.Transfers.FirstOrDefault(t => t.Id == tid);
+            if (record != null)
+            {
+                _transfersStatusLabel.Text = $"{record.FileName}: {record.StatusText}";
+                _transfersStatusLabel.ForeColor = record.Status == TransferStatus.Failed
+                    ? Color.FromArgb(190, 30, 30)
+                    : (record.Status == TransferStatus.Delivered ? Color.FromArgb(16, 124, 65) : Color.DimGray);
+                return;
+            }
+        }
+        _transfersStatusLabel.Text = $"Showing {_transferManager?.Transfers.Count ?? 0} transfer(s). Limit: 100 MB per item.";
+        _transfersStatusLabel.ForeColor = Color.DimGray;
+    }
+
+    private void ShowSelectedTransferDetails()
+    {
+        if (_transfersListView.SelectedItems.Count == 0 || _transferManager == null)
+        {
+            MessageBox.Show(this, "Please select a transfer from the list first.", "ClipSync Transfers", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        string? tid = _transfersListView.SelectedItems[0].Tag as string;
+        if (string.IsNullOrEmpty(tid)) return;
+        var record = _transferManager.Transfers.FirstOrDefault(t => t.Id == tid);
+        if (record == null) return;
+
+        using var detailsDialog = new Form
+        {
+            Text = $"Transfer Details - {record.FileName}",
+            Size = new Size(580, 460),
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+            BackColor = Color.White,
+            Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+        };
+
+        var txtDetails = new TextBox
+        {
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            Location = new Point(16, 16),
+            Size = new Size(532, 340),
+            BackColor = Color.FromArgb(248, 249, 250),
+            Font = new Font("Consolas", 8.75f, FontStyle.Regular)
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Transfer ID:      {record.Id}");
+        sb.AppendLine($"File Name:        {record.FileName}");
+        sb.AppendLine($"Direction:        {(record.IsOutgoing ? "Outgoing" : "Incoming")}");
+        sb.AppendLine($"Size:             {record.FormattedSize} ({record.FileSizeBytes} bytes)");
+        sb.AppendLine($"MIME Type:        {record.MimeType}");
+        sb.AppendLine($"Status:           {record.Status.ToUpperInvariant()}");
+        sb.AppendLine($"Status Detail:    {record.StatusText}");
+        sb.AppendLine($"Created:          {record.CreatedAt:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"Expires:          {record.ExpiresAt:yyyy-MM-dd HH:mm:ss} UTC");
+        if (!string.IsNullOrEmpty(record.DriveFileId))
+        {
+            sb.AppendLine($"Drive File ID:    {record.DriveFileId}");
+        }
+        if (!string.IsNullOrEmpty(record.LocalPath))
+        {
+            sb.AppendLine($"Local Path:       {record.LocalPath}");
+        }
+        sb.AppendLine(new string('-', 60));
+
+        if (!string.IsNullOrEmpty(record.ErrorDetails))
+        {
+            sb.AppendLine("DIAGNOSTIC ERROR DETAILS:");
+            sb.AppendLine(record.ErrorDetails);
+            sb.AppendLine(new string('-', 60));
+            sb.AppendLine("REMEDIATION TIPS:");
+            if (record.ErrorDetails.Contains("404"))
+            {
+                sb.AppendLine("- File Not Found (HTTP 404): The temporary Drive file may have expired (>24h)");
+                sb.AppendLine("  or was uploaded using a different Google account.");
+                sb.AppendLine("- Verify both Mac and Windows are signed into the exact same Google account.");
+            }
+            else if (record.ErrorDetails.Contains("Not connected"))
+            {
+                sb.AppendLine("- Connect Google Drive in Settings -> Google Drive & System tab,");
+                sb.AppendLine("  then click 'Retry' to resume downloading.");
+            }
+            else if (record.ErrorDetails.Contains("Integrity check failed"))
+            {
+                sb.AppendLine("- The decrypted content hash does not match the sender hash.");
+                sb.AppendLine("- Verify that the encryption passphrase matches between devices.");
+            }
+            else
+            {
+                sb.AppendLine("- Click 'Retry' below to re-attempt this transfer.");
+            }
+        }
+        else
+        {
+            sb.AppendLine("No error recorded for this transfer.");
+        }
+
+        txtDetails.Text = sb.ToString();
+
+        var btnClose = new Button
+        {
+            Text = "Close",
+            DialogResult = DialogResult.OK,
+            Location = new Point(448, 372),
+            Size = new Size(100, 32),
+            Cursor = Cursors.Hand
+        };
+
+        var btnRetryModal = new Button
+        {
+            Text = "Retry Transfer",
+            Location = new Point(16, 372),
+            Size = new Size(120, 32),
+            Enabled = record.CanRetry,
+            Cursor = Cursors.Hand
+        };
+        btnRetryModal.Click += (_, _) =>
+        {
+            _transferManager.RetryTransfer(record.Id);
+            detailsDialog.Close();
+        };
+
+        detailsDialog.Controls.Add(txtDetails);
+        detailsDialog.Controls.Add(btnClose);
+        detailsDialog.Controls.Add(btnRetryModal);
+        detailsDialog.AcceptButton = btnClose;
+
+        detailsDialog.ShowDialog(this);
     }
 
     private void UpdateGoogleDriveUI()

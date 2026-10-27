@@ -536,7 +536,8 @@ public sealed class GoogleDriveService
         CancellationToken ct = default)
     {
         string token = await GetValidAccessTokenAsync(ct);
-        string url = $"{DriveFilesEndpoint}/{Uri.EscapeDataString(driveFileId)}?alt=media";
+        string cleanId = driveFileId.Trim();
+        string url = $"{DriveFilesEndpoint}/{Uri.EscapeDataString(cleanId)}?alt=media";
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -545,7 +546,8 @@ public sealed class GoogleDriveService
         if (!res.IsSuccessStatusCode)
         {
             string err = await res.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException($"Download failed (HTTP {res.StatusCode}): {err}");
+            string parsedErr = ParseDriveError(err, res.StatusCode);
+            throw new HttpRequestException(parsedErr);
         }
 
         long? totalBytes = res.Content.Headers.ContentLength;
@@ -647,6 +649,9 @@ public sealed class GoogleDriveService
         listener.Stop();
         return port;
     }
+
+    public static string ParseDriveError(string rawJson, HttpStatusCode statusCode)
+        => TransferHelpers.ParseDriveError(rawJson, statusCode);
 
     private static string ParseOAuthError(string json, HttpStatusCode statusCode)
     {

@@ -406,15 +406,34 @@ public sealed class TransferManager
         // Skip self-initiated
         if (manifest.SenderDeviceId == _deviceId) return;
 
-        // Skip duplicates or already acknowledged
+        // Prevent duplicate concurrent downloads
+        if (_activeTasks.ContainsKey(manifest.TransferId)) return;
+
+        // Skip already delivered/acknowledged transfers
         lock (_acknowledgedTransferIds)
         {
             if (_acknowledgedTransferIds.Contains(manifest.TransferId)) return;
-            _acknowledgedTransferIds.Add(manifest.TransferId);
         }
 
-        string? driveFileId = manifest.DriveFileId ?? manifest.StorageReference;
-        if (string.IsNullOrEmpty(driveFileId)) return;
+        string? driveFileId = (manifest.DriveFileId ?? manifest.StorageReference)?.Trim();
+        if (string.IsNullOrEmpty(driveFileId))
+        {
+            string missingErr = "Transfer manifest is missing Google Drive storage reference.";
+            LogTransferDiagnostic(manifest.TransferId, "Failed", missingErr);
+            var errRecord = new TransferRecord(
+                id: manifest.TransferId,
+                fileName: manifest.FileName,
+                fileSizeBytes: manifest.FileSizeBytes,
+                mimeType: manifest.MimeType,
+                isOutgoing: false,
+                status: TransferStatus.Failed,
+                statusText: $"Delivery failed: {missingErr}",
+                manifest: manifest,
+                errorDetails: missingErr
+            );
+            InsertOrUpdateRecord(errRecord);
+            return;
+        }
 
         var record = new TransferRecord(
             id: manifest.TransferId,
@@ -424,12 +443,14 @@ public sealed class TransferManager
             isOutgoing: false,
             status: TransferStatus.Downloading,
             statusText: "Downloading encrypted payload...",
-            driveFileId: driveFileId
+            driveFileId: driveFileId,
+            manifest: manifest
         );
         InsertOrUpdateRecord(record);
 
         var cts = new CancellationTokenSource();
         _activeTasks[manifest.TransferId] = cts;
+        LogTransferDiagnostic(manifest.TransferId, "DownloadStart", $"Starting download for '{manifest.FileName}' ({manifest.FileSizeBytes} bytes).");
 
         try
         {
@@ -444,6 +465,13 @@ public sealed class TransferManager
             });
 
             byte[] ciphertext = await _googleDrive.DownloadEncryptedPayloadAsync(driveFileId, progress, cts.Token);
+            LogTransferDiagnostic(manifest.TransferId, "DownloadSuccess", $"Retrieved {ciphertext.Length} bytes from Google Drive.");
+
+            // Verify downloaded byte count matches expected size before decrypting
+            if (manifest.FileSizeBytes > 0 && ciphertext.Length != manifest.FileSizeBytes)
+            {
+                throw new InvalidDataException($"Ciphertext size mismatch: downloaded {ciphertext.Length} bytes, expected {manifest.FileSizeBytes} bytes.");
+            }
 
             UpdateRecord(manifest.TransferId, r =>
             {
@@ -457,9 +485,11 @@ public sealed class TransferManager
                 manifest.EncryptionTag,
                 manifest.Sha256Hash
             );
+            LogTransferDiagnostic(manifest.TransferId, "DecryptSuccess", $"Decryption and SHA-256 integrity check verified ({decryptedData.Length} bytes).");
 
             // 3. Deliver to Windows clipboard and Downloads/ClipSync folder
             string localFilePath = DeliverPayload(decryptedData, manifest.FileName, manifest.MimeType);
+            LogTransferDiagnostic(manifest.TransferId, "Delivered", $"Delivered to clipboard and saved to '{localFilePath}'.");
 
             UpdateRecord(manifest.TransferId, r =>
             {
@@ -467,7 +497,14 @@ public sealed class TransferManager
                 r.Progress = 1.0;
                 r.LocalPath = localFilePath;
                 r.StatusText = "Delivered to Clipboard & Downloads";
+                r.ErrorDetails = null;
             });
+
+            // Mark as acknowledged only after decryption and delivery succeed!
+            lock (_acknowledgedTransferIds)
+            {
+                _acknowledgedTransferIds.Add(manifest.TransferId);
+            }
 
             // 4. Send ACK to Cloudflare server and WebSocket
             var ackResp = await SendAckToServerAsync(manifest.TransferId, cts.Token);
@@ -482,10 +519,12 @@ public sealed class TransferManager
                 {
                     r.StatusText = "Delivered & Purged from Drive";
                 });
+                LogTransferDiagnostic(manifest.TransferId, "Purged", "Delivered to all peers; purged from Drive.");
             }
         }
         catch (OperationCanceledException)
         {
+            LogTransferDiagnostic(manifest.TransferId, "Cancelled", "Transfer cancelled by user.");
             UpdateRecord(manifest.TransferId, r =>
             {
                 r.Status = TransferStatus.Cancelled;
@@ -494,11 +533,22 @@ public sealed class TransferManager
         }
         catch (Exception ex)
         {
-            LatestErrorMessage = $"Failed to receive '{manifest.FileName}': {ex.Message}";
+            lock (_acknowledgedTransferIds)
+            {
+                _acknowledgedTransferIds.Remove(manifest.TransferId);
+            }
+
+            string sanitizedErr = ex.Message;
+            string errorDetails = ex.ToString();
+            LatestErrorMessage = $"Failed to receive '{manifest.FileName}': {sanitizedErr}";
+            LogTransferDiagnostic(manifest.TransferId, "DeliveryFailed", $"{sanitizedErr} ({ex.GetType().Name})");
+
             UpdateRecord(manifest.TransferId, r =>
             {
                 r.Status = TransferStatus.Failed;
-                r.StatusText = $"Delivery failed: {ex.Message}";
+                r.StatusText = $"Delivery failed: {sanitizedErr}";
+                r.ErrorDetails = errorDetails;
+                r.Manifest = manifest;
             });
             OnTransferError?.Invoke(LatestErrorMessage);
         }
@@ -517,13 +567,14 @@ public sealed class TransferManager
         );
         Directory.CreateDirectory(downloadsDir);
 
-        string destinationPath = Path.Combine(downloadsDir, fileName);
+        string safeFileName = SanitizeFileName(fileName);
+        string destinationPath = Path.Combine(downloadsDir, safeFileName);
 
         // Prevent overwriting existing file by appending timestamp
         if (File.Exists(destinationPath))
         {
-            string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-            string ext = Path.GetExtension(fileName);
+            string nameWithoutExt = Path.GetFileNameWithoutExtension(safeFileName);
+            string ext = Path.GetExtension(safeFileName);
             string uniqueName = $"{nameWithoutExt}_{DateTime.UtcNow:yyyyMMdd_HHmmss}{ext}";
             destinationPath = Path.Combine(downloadsDir, uniqueName);
         }
@@ -543,6 +594,8 @@ public sealed class TransferManager
 
         return destinationPath;
     }
+
+    public static string SanitizeFileName(string fileName) => TransferHelpers.SanitizeFileName(fileName);
 
     // -------------------------------------------------------------------------
     // Offline Reconnection & Pending Transfers Fetch
@@ -679,6 +732,37 @@ public sealed class TransferManager
                 HandleLocalFiles(new[] { retryFile });
             }
         }
+        else if (!record.IsOutgoing && record.Manifest != null)
+        {
+            // Re-attempt incoming transfer
+            LogTransferDiagnostic(record.Id, "Retry", $"User retrying incoming transfer for '{record.FileName}'.");
+            record.Status = TransferStatus.Downloading;
+            record.StatusText = "Retrying download...";
+            record.ErrorDetails = null;
+            OnTransfersChanged?.Invoke();
+
+            _ = Task.Run(async () =>
+            {
+                await HandleRemoteTransferAnnouncedAsync(record.Manifest);
+            });
+        }
+    }
+
+    public static void LogTransferDiagnostic(string transferId, string action, string detail)
+    {
+        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'");
+        string shortId = transferId.Length > 8 ? transferId[..8] : transferId;
+        string line = $"[{timestamp}] [Transfer:{shortId}] {action}: {detail}";
+        Console.WriteLine(line);
+
+        try
+        {
+            string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipSync");
+            Directory.CreateDirectory(logDir);
+            string logPath = Path.Combine(logDir, "transfers.log");
+            File.AppendAllText(logPath, line + Environment.NewLine);
+        }
+        catch { }
     }
 
     public void ClearCompleted()

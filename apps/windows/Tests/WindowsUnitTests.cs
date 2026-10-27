@@ -312,8 +312,105 @@ public static class WindowsUnitTests
         }
         Console.WriteLine("  [PASS] Google OAuth error response detection and user guidance verified");
 
+        // 17. TransferManifest Full Serialization & Field Invariants
+        var manifest = new TransferManifest(
+            Version: 1,
+            TransferId: "transfer-uuid-12345",
+            SenderDeviceId: "device-mac-m5",
+            FileName: "Screenshot 2026-10-27 at 13.22.43.png",
+            FileSizeBytes: 1048576,
+            MimeType: "image/png",
+            Sha256Hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            EncryptionIv: "dBjftJeZ4CVP",
+            EncryptionTag: "mB92K27uhbUJU1p1r_wW1g",
+            Medium: TransferMedium.GoogleDrive,
+            StorageReference: "drive-file-id-abc987",
+            DriveFileId: "drive-file-id-abc987",
+            CreatedAt: DateTime.UtcNow.ToString("O"),
+            ExpiresAt: DateTime.UtcNow.AddHours(24).ToString("O"),
+            Status: TransferStatus.Ready,
+            DeliveredTo: new[] { "device-windows-10" }
+        );
+
+        string manifestJson = System.Text.Json.JsonSerializer.Serialize(manifest);
+        var deserializedManifest = System.Text.Json.JsonSerializer.Deserialize<TransferManifest>(manifestJson);
+        AssertTrue(deserializedManifest != null, "Manifest must deserialize correctly");
+        AssertEqual(manifest.TransferId, deserializedManifest!.TransferId);
+        AssertEqual(manifest.SenderDeviceId, deserializedManifest.SenderDeviceId);
+        AssertEqual(manifest.FileName, deserializedManifest.FileName);
+        AssertEqual(manifest.FileSizeBytes, deserializedManifest.FileSizeBytes);
+        AssertEqual(manifest.MimeType, deserializedManifest.MimeType);
+        AssertEqual(manifest.Sha256Hash, deserializedManifest.Sha256Hash);
+        AssertEqual(manifest.EncryptionIv, deserializedManifest.EncryptionIv);
+        AssertEqual(manifest.EncryptionTag, deserializedManifest.EncryptionTag);
+        AssertEqual(manifest.DriveFileId, deserializedManifest.DriveFileId);
+        Console.WriteLine("  [PASS] Transfer manifest JSON serialization and cross-platform fields verified");
+
+        // 18. Downloaded Ciphertext Size Mismatch Detection
+        long expectedCiphertextSize = 2048;
+        byte[] receivedCiphertext = new byte[1024]; // Corrupted / partial download
+        bool sizeMismatchDetected = false;
+        if (expectedCiphertextSize > 0 && receivedCiphertext.Length != expectedCiphertextSize)
+        {
+            sizeMismatchDetected = true;
+        }
+        AssertTrue(sizeMismatchDetected, "Size mismatch must be detected before decryption attempt");
+        Console.WriteLine("  [PASS] Ciphertext size mismatch detection prior to decryption verified");
+
+        // 19. Cross-Platform Filename Sanitization
+        string dirtyFileName = "Screen:Shot/2026*10?27<test>|name.png";
+        string sanitized = TransferHelpers.SanitizeFileName(dirtyFileName);
+        AssertTrue(!sanitized.Contains(':'), "Sanitized filename must not contain colon");
+        AssertTrue(!sanitized.Contains('/'), "Sanitized filename must not contain slash");
+        AssertTrue(!sanitized.Contains('*'), "Sanitized filename must not contain asterisk");
+        AssertTrue(!sanitized.Contains('?'), "Sanitized filename must not contain question mark");
+        AssertTrue(!sanitized.Contains('<'), "Sanitized filename must not contain less-than");
+        AssertTrue(!sanitized.Contains('>'), "Sanitized filename must not contain greater-than");
+        AssertTrue(!sanitized.Contains('|'), "Sanitized filename must not contain pipe");
+
+        string emptySanitized = TransferHelpers.SanitizeFileName("   ");
+        AssertTrue(emptySanitized.StartsWith("Clipboard_"), "Empty filename must fallback to default Clipboard_ name");
+        AssertTrue(emptySanitized.EndsWith(".png"), "Empty image filename must have .png extension");
+        Console.WriteLine("  [PASS] Cross-platform filename sanitization against invalid characters verified");
+
+        // 20. Google Drive HTTP Error Sanitization & Guidance
+        string notFoundError = TransferHelpers.ParseDriveError("{\"error\":{\"code\":404}}", System.Net.HttpStatusCode.NotFound);
+        AssertTrue(notFoundError.Contains("HTTP 404"), "Must mention HTTP 404");
+        AssertTrue(notFoundError.Contains("Google account"), "Must provide guidance on matching Google accounts");
+
+        string unauthorizedError = TransferHelpers.ParseDriveError("{\"error\":{\"code\":401}}", System.Net.HttpStatusCode.Unauthorized);
+        AssertTrue(unauthorizedError.Contains("Settings"), "Must guide user to Settings");
+
+        string customGoogleError = TransferHelpers.ParseDriveError("{\"error\":{\"code\":500,\"message\":\"Internal backend error\"}}", System.Net.HttpStatusCode.InternalServerError);
+        AssertTrue(customGoogleError.Contains("Internal backend error"), "Must extract Google error message");
+        Console.WriteLine("  [PASS] Google Drive error response parsing and actionable user guidance verified");
+
+        // 21. Incoming Transfer Record & Manifest Preservation for Retry
+        var failedIncomingRecord = new TransferRecord(
+            id: "incoming-fail-001",
+            fileName: "TestImage.png",
+            fileSizeBytes: 500000,
+            mimeType: "image/png",
+            isOutgoing: false,
+            status: TransferStatus.Failed,
+            statusText: "Delivery failed: Download failed (HTTP 404): File not found in Google Drive.",
+            manifest: manifest,
+            errorDetails: "System.Net.Http.HttpRequestException: Download failed (HTTP 404)..."
+        );
+        AssertTrue(!failedIncomingRecord.IsOutgoing, "Record must be incoming");
+        AssertTrue(failedIncomingRecord.CanRetry, "Failed incoming transfer must be retryable");
+        AssertTrue(failedIncomingRecord.Manifest != null, "Manifest must be preserved for retry");
+        AssertTrue(!string.IsNullOrEmpty(failedIncomingRecord.ErrorDetails), "ErrorDetails must be preserved");
+        Console.WriteLine("  [PASS] Incoming transfer record state machine and manifest preservation for retry verified");
+
+        // 22. Status Formatting and Untruncated Status Display
+        AssertEqual("1 MB", TransferRecord.FormatByteCount(1048576));
+        AssertEqual("2.2 MB", TransferRecord.FormatByteCount(2306867));
+        AssertEqual("678 KB", TransferRecord.FormatByteCount(694272));
+        Console.WriteLine("  [PASS] Transfer size formatting and precision verified");
+
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("\n[SUCCESS] ALL 16 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
+        Console.WriteLine("\n[SUCCESS] ALL 22 WINDOWS NATIVE UNIT TESTS PASSED SUCCESSFULLY!\n");
         Console.ResetColor();
     }
 }

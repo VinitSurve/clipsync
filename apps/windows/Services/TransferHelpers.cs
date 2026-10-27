@@ -64,4 +64,64 @@ public static class TransferHelpers
             _ => "application/octet-stream"
         };
     }
+
+    private static readonly System.Collections.Generic.HashSet<char> InvalidFileNameChars = new(
+        System.Linq.Enumerable.Concat(
+            new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' },
+            Path.GetInvalidFileNameChars()
+        )
+    );
+
+    public static string SanitizeFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return $"Clipboard_{DateTime.UtcNow:yyyyMMdd_HHmmss}.png";
+        }
+
+        var sb = new System.Text.StringBuilder(fileName.Length);
+        foreach (char c in fileName)
+        {
+            sb.Append(InvalidFileNameChars.Contains(c) || c < 32 ? '_' : c);
+        }
+        return sb.ToString();
+    }
+
+    public static string ParseDriveError(string rawJson, System.Net.HttpStatusCode statusCode)
+    {
+        if (statusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return "Download failed (HTTP 404): File not found in Google Drive. " +
+                   "The temporary file may have expired (>24h), been purged, " +
+                   "or was uploaded using a different Google account. " +
+                   "Ensure Mac and Windows are signed into the same Google account.";
+        }
+
+        if (statusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+        {
+            return $"Download failed (HTTP {(int)statusCode}): Access denied by Google Drive. " +
+                   "Your Google authorization may have expired or lacks access to this file. " +
+                   "Please reconnect Google Drive in Settings.";
+        }
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("error", out var errProp))
+            {
+                if (errProp.ValueKind == System.Text.Json.JsonValueKind.Object && errProp.TryGetProperty("message", out var msgProp))
+                {
+                    string msg = msgProp.GetString() ?? "";
+                    if (!string.IsNullOrWhiteSpace(msg))
+                    {
+                        return $"Google Drive error (HTTP {(int)statusCode}): {msg}";
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return $"Download failed (HTTP {(int)statusCode})";
+    }
 }

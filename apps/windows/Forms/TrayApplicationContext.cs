@@ -413,6 +413,15 @@ public sealed class TrayApplicationContext : ApplicationContext
             _notifyIcon.ShowBalloonTip(2500, "ClipSync Transfer", err, ToolTipIcon.Warning);
         };
 
+        _googleDriveService.OnAuthStatusChanged += () =>
+        {
+            if (_googleDriveService.IsConnected && _transferManager != null)
+            {
+                _ = _transferManager.FetchPendingTransfersAsync();
+                _ = _googleDriveService.SweepOrphanedFilesAsync(TimeSpan.FromHours(24));
+            }
+        };
+
         _syncService.OnStateChanged += state =>
         {
             _connectionState = state;

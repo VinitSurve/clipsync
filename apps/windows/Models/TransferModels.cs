@@ -95,6 +95,8 @@ public sealed class TransferRecord
     public DateTime CreatedAt { get; init; }
     public DateTime ExpiresAt { get; init; }
     public byte[]? OriginalPayload { get; set; } // Preserved for outgoing retry if needed
+    public TransferManifest? Manifest { get; set; } // Preserved for incoming retry if needed
+    public string? ErrorDetails { get; set; }
 
     public bool IsComplete => Status is TransferStatus.Delivered or TransferStatus.Expired or TransferStatus.Failed or TransferStatus.Cancelled;
     public bool CanCancel => Status is TransferStatus.Pending or TransferStatus.Uploading or TransferStatus.Ready or TransferStatus.Downloading;
@@ -116,7 +118,9 @@ public sealed class TransferRecord
         string? localPath = null,
         DateTime? createdAt = null,
         DateTime? expiresAt = null,
-        byte[]? originalPayload = null)
+        byte[]? originalPayload = null,
+        TransferManifest? manifest = null,
+        string? errorDetails = null)
     {
         Id = id;
         FileName = fileName;
@@ -132,6 +136,8 @@ public sealed class TransferRecord
         CreatedAt = createdAt ?? DateTime.UtcNow;
         ExpiresAt = expiresAt ?? DateTime.UtcNow.Add(TransferConstants.MaxTransferRetention);
         OriginalPayload = originalPayload;
+        Manifest = manifest;
+        ErrorDetails = errorDetails;
     }
 
     public static string FormatByteCount(long bytes)

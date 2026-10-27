@@ -301,6 +301,16 @@ public sealed class ClipboardMonitor : Form
 
     public void SetRemoteClipboard(string text)
     {
+        if (InvokeRequired)
+        {
+            try
+            {
+                Invoke(() => SetRemoteClipboard(text));
+                return;
+            }
+            catch { return; }
+        }
+
         _lastReceivedHash = ClipSyncCrypto.ComputeSha256(text);
 
         for (int retry = 0; retry < 5; retry++)
@@ -320,6 +330,16 @@ public sealed class ClipboardMonitor : Form
 
     public void SetRemoteClipboardImage(byte[] pngBytes)
     {
+        if (InvokeRequired)
+        {
+            try
+            {
+                Invoke(() => SetRemoteClipboardImage(pngBytes));
+                return;
+            }
+            catch { return; }
+        }
+
         _lastReceivedHash = ClipSyncCrypto.ComputeSha256(pngBytes);
 
         for (int retry = 0; retry < 5; retry++)
@@ -328,9 +348,10 @@ public sealed class ClipboardMonitor : Form
             {
                 using var ms = new MemoryStream(pngBytes);
                 using var img = Image.FromStream(ms);
+                using var bmp = new Bitmap(img);
 
                 var dataObj = new DataObject();
-                dataObj.SetData(DataFormats.Bitmap, true, img);
+                dataObj.SetData(DataFormats.Bitmap, true, bmp);
                 dataObj.SetData("PNG", false, new MemoryStream(pngBytes));
                 Clipboard.SetDataObject(dataObj, true);
                 break;
@@ -349,6 +370,16 @@ public sealed class ClipboardMonitor : Form
 
     public void SetRemoteClipboardFiles(string[] filePaths)
     {
+        if (InvokeRequired)
+        {
+            try
+            {
+                Invoke(() => SetRemoteClipboardFiles(filePaths));
+                return;
+            }
+            catch { return; }
+        }
+
         var sb = new System.Text.StringBuilder();
         foreach (string p in filePaths)
         {
