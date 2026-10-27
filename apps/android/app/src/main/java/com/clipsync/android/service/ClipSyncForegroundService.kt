@@ -570,7 +570,8 @@ class ClipSyncForegroundService : Service() {
         )
 
         val syncIntent = Intent(this, ClipSyncCaptureActivity::class.java).apply {
-            action = ClipSyncCaptureActivity.ACTION_CAPTURE_AND_SYNC
+            action = ClipSyncCaptureActivity.ACTION_SYNC_TO_MAC
+            putExtra(ClipSyncCaptureActivity.EXTRA_SOURCE, "foreground_notification")
         }
         val syncPendingIntent = PendingIntent.getActivity(
             this,
@@ -584,7 +585,7 @@ class ClipSyncForegroundService : Service() {
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_menu_agenda)
             .setContentIntent(openAppIntent)
-            .addAction(android.R.drawable.ic_menu_share, "Sync Clipboard", syncPendingIntent)
+            .addAction(android.R.drawable.ic_menu_send, "Sync to Mac", syncPendingIntent)
             .setOngoing(true)
             .build()
     }

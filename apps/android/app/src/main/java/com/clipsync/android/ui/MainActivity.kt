@@ -151,6 +151,17 @@ class MainActivity : AppCompatActivity() {
         setupRecyclerViews()
         setupToolbar()
 
+        // Request notification permission on Android 13+ (Tiramisu)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                androidx.core.app.ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                    101
+                )
+            }
+        }
+
         // Register broadcast receivers
         val filter = IntentFilter().apply {
             addAction(ClipSyncForegroundService.ACTION_ITEM_RECEIVED)

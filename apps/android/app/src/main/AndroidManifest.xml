@@ -36,6 +36,7 @@
             android:name=".ui.ClipSyncCaptureActivity"
             android:label="Sync with ClipSync"
             android:theme="@style/Theme.ClipSync.Transparent"
+            android:taskAffinity=""
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:exported="true">
