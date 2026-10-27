@@ -111,6 +111,16 @@ jobs:
           echo "Verifying APK signature using $APKSIGNER..."
           $APKSIGNER verify --verbose "$APK_SOURCE"
 
+          # Verify certificate SHA-256 fingerprint matches production release identity
+          CERT_FINGERPRINT=$($APKSIGNER verify --print-certs "$APK_SOURCE" | grep "SHA-256 digest:" | head -n 1 | awk '{print $NF}')
+          EXPECTED_FINGERPRINT="287c8f99fa6d6858959d57344a681011262bf04178b3b38b791dfe1a81a162a9"
+          echo "Certificate SHA-256 fingerprint: $CERT_FINGERPRINT"
+          if [ "$CERT_FINGERPRINT" != "$EXPECTED_FINGERPRINT" ]; then
+            echo "::error::Certificate fingerprint mismatch! Got $CERT_FINGERPRINT, expected $EXPECTED_FINGERPRINT"
+            exit 1
+          fi
+          echo "✅ Certificate matches permanent ClipSync signing identity ($EXPECTED_FINGERPRINT)"
+
           # Stage release assets with clean asset name ClipSync.apk
           mkdir -p release-assets
           cp "$APK_SOURCE" release-assets/ClipSync.apk
