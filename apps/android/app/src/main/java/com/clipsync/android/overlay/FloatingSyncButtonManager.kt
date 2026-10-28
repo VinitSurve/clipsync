@@ -78,6 +78,11 @@ class FloatingSyncButtonManager(
     var currentState: SyncState = SyncState.IDLE
         private set
 
+    var currentSizeDp: Int = FloatingOverlayCalculator.normalizeSize(secureStorage.floatingButtonSizeDp)
+        private set
+
+    private var isTouching: Boolean = false
+
     // Saved position of the orb itself (x, y)
     private var currentOrbX: Int = 0
     private var currentOrbY: Int = 0
@@ -89,6 +94,22 @@ class FloatingSyncButtonManager(
     private var syncRotateAnimator: ValueAnimator? = null
     private var badgeFadeRunnable: Runnable? = null
     private var stateResetRunnable: Runnable? = null
+
+    private val fadeToIdleRunnable = Runnable {
+        if (!isAttached || currentState != SyncState.IDLE) return@Runnable
+        if (!secureStorage.isFloatingButtonTransparencyEnabled) return@Runnable
+        if (isTouching) return@Runnable
+
+        val orb = orbSyncCore ?: return@Runnable
+        if (areAnimationsEnabled()) {
+            orb.animate()
+                .alpha(FloatingOverlayCalculator.DEFAULT_IDLE_ALPHA)
+                .setDuration(FloatingOverlayCalculator.FADE_DURATION_MS)
+                .start()
+        } else {
+            orb.alpha = FloatingOverlayCalculator.DEFAULT_IDLE_ALPHA
+        }
+    }
 
     init {
         activeInstance = this
@@ -124,6 +145,8 @@ class FloatingSyncButtonManager(
     fun hide() {
         mainHandler.post {
             cancelAnimators()
+            cancelIdleFade()
+            isTouching = false
             if (isAttached && overlayView != null) {
                 try {
                     windowManager.removeView(overlayView)
@@ -165,7 +188,7 @@ class FloatingSyncButtonManager(
             val screenWidth = metrics.widthPixels
             val screenHeight = metrics.heightPixels
 
-            val buttonSize = dpToPx(56)
+            val buttonSize = dpToPx(currentSizeDp)
             val clamped = FloatingOverlayCalculator.clampCoordinates(
                 x = currentOrbX,
                 y = currentOrbY,
@@ -218,7 +241,20 @@ class FloatingSyncButtonManager(
         val metrics = context.resources.displayMetrics
         val screenWidth = metrics.widthPixels
         val screenHeight = metrics.heightPixels
-        val buttonSize = dpToPx(56)
+        currentSizeDp = FloatingOverlayCalculator.normalizeSize(secureStorage.floatingButtonSizeDp)
+        val buttonSize = dpToPx(currentSizeDp)
+        val iconSize = dpToPx(FloatingOverlayCalculator.getIconSizeDp(currentSizeDp))
+
+        orbSyncCore?.layoutParams?.let { lp ->
+            lp.width = buttonSize
+            lp.height = buttonSize
+            orbSyncCore?.layoutParams = lp
+        }
+        imgSyncCoreIcon?.layoutParams?.let { lp ->
+            lp.width = iconSize
+            lp.height = iconSize
+            imgSyncCoreIcon?.layoutParams = lp
+        }
 
         // Load saved coordinates or initialize near right edge
         val savedX = secureStorage.floatingButtonX
@@ -268,7 +304,8 @@ class FloatingSyncButtonManager(
         windowManager.addView(view, params)
         isAttached = true
         applyState(SyncState.IDLE)
-        Log.i(TAG, "Sync Core attached at x=$currentOrbX, y=$currentOrbY (isRight=$isSnappedToRight)")
+        scheduleIdleFade()
+        Log.i(TAG, "Sync Core attached (size=${currentSizeDp}dp) at x=$currentOrbX, y=$currentOrbY (isRight=$isSnappedToRight)")
     }
 
     private fun updateContainerChildOrder() {
@@ -299,6 +336,8 @@ class FloatingSyncButtonManager(
         orbView.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    isTouching = true
+                    restoreFullOpacity()
                     cancelAnimators()
                     txtFeedbackBadge?.visibility = View.GONE
 
@@ -329,7 +368,7 @@ class FloatingSyncButtonManager(
 
                     if (isDragging) {
                         val metrics = context.resources.displayMetrics
-                        val buttonSize = dpToPx(56)
+                        val buttonSize = dpToPx(currentSizeDp)
                         val clamped = FloatingOverlayCalculator.clampCoordinates(
                             x = initialX + dx.toInt(),
                             y = initialY + dy.toInt(),
@@ -354,6 +393,7 @@ class FloatingSyncButtonManager(
                 }
 
                 MotionEvent.ACTION_UP -> {
+                    isTouching = false
                     if (areAnimationsEnabled()) {
                         orbView.animate()
                             .scaleX(1.0f)
@@ -373,7 +413,7 @@ class FloatingSyncButtonManager(
                         // Drag completed: Snap to screen edge smoothly
                         val metrics = context.resources.displayMetrics
                         val screenWidth = metrics.widthPixels
-                        val buttonSize = dpToPx(56)
+                        val buttonSize = dpToPx(currentSizeDp)
 
                         val targetX = FloatingOverlayCalculator.computeSnapTargetX(
                             currentX = currentOrbX,
@@ -382,14 +422,21 @@ class FloatingSyncButtonManager(
                             margin = dpToPx(8)
                         )
                         animateSnap(currentOrbX, targetX, params)
+                        if (currentState == SyncState.IDLE) {
+                            scheduleIdleFade()
+                        }
                     }
                     isDragging = false
                     true
                 }
 
                 MotionEvent.ACTION_CANCEL -> {
+                    isTouching = false
                     orbView.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start()
                     isDragging = false
+                    if (currentState == SyncState.IDLE) {
+                        scheduleIdleFade()
+                    }
                     true
                 }
 
@@ -453,15 +500,18 @@ class FloatingSyncButtonManager(
                     icon.rotation = 0f
                     icon.scaleX = 1f
                     icon.scaleY = 1f
+                    scheduleIdleFade()
                 }
 
                 SyncState.SYNCING -> {
+                    restoreFullOpacity()
                     orb.setBackgroundResource(R.drawable.bg_sync_core_orb)
                     icon.setImageResource(R.drawable.ic_sync_core_arrows)
                     startRotationAnimation()
                 }
 
                 SyncState.SUCCESS -> {
+                    restoreFullOpacity()
                     stopRotationAnimation()
                     orb.setBackgroundResource(R.drawable.bg_sync_core_orb_success)
                     icon.setImageResource(R.drawable.ic_sync_core_check)
@@ -486,6 +536,7 @@ class FloatingSyncButtonManager(
                 }
 
                 SyncState.ERROR -> {
+                    restoreFullOpacity()
                     stopRotationAnimation()
                     orb.setBackgroundResource(R.drawable.bg_sync_core_orb_error)
                     icon.setImageResource(R.drawable.ic_sync_core_error)
@@ -556,7 +607,7 @@ class FloatingSyncButtonManager(
     private fun animateSnap(startX: Int, endX: Int, params: WindowManager.LayoutParams) {
         val metrics = context.resources.displayMetrics
         val screenWidth = metrics.widthPixels
-        val buttonSize = dpToPx(56)
+        val buttonSize = dpToPx(currentSizeDp)
 
         isSnappedToRight = (endX + buttonSize / 2 >= screenWidth / 2)
         updateContainerChildOrder()
@@ -689,7 +740,111 @@ class FloatingSyncButtonManager(
         }
     }
 
+    /**
+     * Immediately resizes the floating button overlay and centers its icon.
+     */
+    fun updateSize(newSizeDp: Int) {
+        mainHandler.post {
+            val sizeDp = FloatingOverlayCalculator.normalizeSize(newSizeDp)
+            currentSizeDp = sizeDp
+            secureStorage.floatingButtonSizeDp = sizeDp
+
+            val orb = orbSyncCore ?: return@post
+            val icon = imgSyncCoreIcon ?: return@post
+            val params = layoutParams ?: return@post
+            val view = overlayView ?: return@post
+
+            val buttonSize = dpToPx(sizeDp)
+            val iconSize = dpToPx(FloatingOverlayCalculator.getIconSizeDp(sizeDp))
+
+            val orbLp = orb.layoutParams
+            orbLp.width = buttonSize
+            orbLp.height = buttonSize
+            orb.layoutParams = orbLp
+
+            val iconLp = icon.layoutParams
+            iconLp.width = iconSize
+            iconLp.height = iconSize
+            icon.layoutParams = iconLp
+
+            // Re-clamp position so button does not go off-screen when resized
+            val metrics = context.resources.displayMetrics
+            val screenWidth = metrics.widthPixels
+            val screenHeight = metrics.heightPixels
+
+            val clamped = FloatingOverlayCalculator.clampCoordinates(
+                x = currentOrbX,
+                y = currentOrbY,
+                buttonWidth = buttonSize,
+                buttonHeight = buttonSize,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                topInset = dpToPx(36),
+                bottomInset = dpToPx(48)
+            )
+
+            // Re-snap to nearest edge with updated buttonWidth
+            val snappedX = FloatingOverlayCalculator.computeSnapTargetX(
+                currentX = clamped.first,
+                buttonWidth = buttonSize,
+                screenWidth = screenWidth,
+                margin = dpToPx(8)
+            )
+
+            currentOrbX = snappedX
+            currentOrbY = clamped.second
+            isSnappedToRight = (currentOrbX + buttonSize / 2 >= screenWidth / 2)
+            updateContainerChildOrder()
+
+            params.x = currentOrbX
+            params.y = currentOrbY
+
+            try {
+                windowManager.updateViewLayout(view, params)
+                secureStorage.floatingButtonX = currentOrbX
+                secureStorage.floatingButtonY = currentOrbY
+                Log.i(TAG, "Updated floating button size to $sizeDp dp at ($currentOrbX, $currentOrbY)")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not update layout after resize: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Enables or disables adaptive idle transparency.
+     */
+    fun updateTransparency(enabled: Boolean) {
+        mainHandler.post {
+            secureStorage.isFloatingButtonTransparencyEnabled = enabled
+            if (enabled) {
+                if (currentState == SyncState.IDLE && !isTouching) {
+                    scheduleIdleFade()
+                }
+            } else {
+                restoreFullOpacity()
+            }
+        }
+    }
+
+    fun scheduleIdleFade() {
+        cancelIdleFade()
+        if (isAttached && currentState == SyncState.IDLE && secureStorage.isFloatingButtonTransparencyEnabled && !isTouching) {
+            mainHandler.postDelayed(fadeToIdleRunnable, FloatingOverlayCalculator.IDLE_FADE_DELAY_MS)
+        }
+    }
+
+    fun cancelIdleFade() {
+        mainHandler.removeCallbacks(fadeToIdleRunnable)
+    }
+
+    fun restoreFullOpacity() {
+        cancelIdleFade()
+        orbSyncCore?.animate()?.cancel()
+        orbSyncCore?.alpha = FloatingOverlayCalculator.FULL_ALPHA
+    }
+
     private fun cancelAnimators() {
+        cancelIdleFade()
         snapAnimator?.cancel()
         snapAnimator = null
         stopRotationAnimation()
@@ -705,6 +860,10 @@ class FloatingSyncButtonManager(
 
     companion object {
         const val TAG = "FloatingSyncButton"
+
+        const val SIZE_SMALL_DP = 40
+        const val SIZE_MEDIUM_DP = 48
+        const val SIZE_LARGE_DP = 56
 
         @Volatile
         var activeInstance: FloatingSyncButtonManager? = null
@@ -726,6 +885,28 @@ class FloatingSyncButtonManager(
  * Pure calculation helpers for testability without WindowManager mocks.
  */
 object FloatingOverlayCalculator {
+
+    const val DEFAULT_IDLE_ALPHA = 0.40f
+    const val FULL_ALPHA = 1.0f
+    const val IDLE_FADE_DELAY_MS = 2500L
+    const val FADE_DURATION_MS = 400L
+
+    fun normalizeSize(dp: Int): Int {
+        return when {
+            dp <= 40 -> 40
+            dp >= 56 -> 56
+            else -> 48
+        }
+    }
+
+    fun getIconSizeDp(sizeDp: Int): Int {
+        return when (normalizeSize(sizeDp)) {
+            40 -> 20
+            48 -> 24
+            56 -> 28
+            else -> 24
+        }
+    }
 
     fun isDragGesture(dx: Float, dy: Float, touchSlop: Int): Boolean {
         return hypot(dx.toDouble(), dy.toDouble()) > touchSlop

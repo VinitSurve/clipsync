@@ -33,9 +33,11 @@ import com.clipsync.android.models.DeviceListResponse
 import com.clipsync.android.models.PairingSessionResponse
 import com.clipsync.android.service.ClipSyncForegroundService
 import com.clipsync.android.service.ClipboardStateManager
+import com.clipsync.android.overlay.FloatingSyncButtonManager
 import com.clipsync.android.storage.SecureStorage
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.gson.Gson
 import okhttp3.Call
@@ -92,6 +94,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtEmptyHistory: TextView
     private lateinit var recyclerHistory: RecyclerView
     private lateinit var switchFloatingButton: MaterialSwitch
+    private lateinit var groupButtonSize: MaterialButtonToggleGroup
+    private lateinit var switchIdleTransparency: MaterialSwitch
 
     private var currentConnectionState: String = ClipSyncForegroundService.STATE_DISCONNECTED
 
@@ -376,6 +380,10 @@ class MainActivity : AppCompatActivity() {
         switchFloatingButton.setOnCheckedChangeListener { _, isChecked ->
             handleFloatingButtonToggle(isChecked)
         }
+
+        groupButtonSize = findViewById(R.id.groupButtonSize)
+        switchIdleTransparency = findViewById(R.id.switchIdleTransparency)
+        setupFloatingSettings()
     }
 
     private fun updateFloatingSwitchState() {
@@ -390,6 +398,61 @@ class MainActivity : AppCompatActivity() {
         if (isEnabled) {
             val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
                 action = ClipSyncForegroundService.ACTION_SHOW_FLOATING_BUTTON
+            }
+            ContextCompat.startForegroundService(this, intent)
+        }
+
+        val currentSize = secureStorage.floatingButtonSizeDp
+        val targetButtonId = when (currentSize) {
+            40 -> R.id.btnSizeSmall
+            56 -> R.id.btnSizeLarge
+            else -> R.id.btnSizeMedium
+        }
+        if (groupButtonSize.checkedButtonId != targetButtonId) {
+            groupButtonSize.check(targetButtonId)
+        }
+        if (switchIdleTransparency.isChecked != secureStorage.isFloatingButtonTransparencyEnabled) {
+            switchIdleTransparency.isChecked = secureStorage.isFloatingButtonTransparencyEnabled
+        }
+    }
+
+    private fun setupFloatingSettings() {
+        val currentSize = secureStorage.floatingButtonSizeDp
+        val checkedButtonId = when (currentSize) {
+            40 -> R.id.btnSizeSmall
+            56 -> R.id.btnSizeLarge
+            else -> R.id.btnSizeMedium
+        }
+        groupButtonSize.check(checkedButtonId)
+
+        groupButtonSize.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (isChecked) {
+                val newSizeDp = when (checkedId) {
+                    R.id.btnSizeSmall -> 40
+                    R.id.btnSizeLarge -> 56
+                    else -> 48
+                }
+                secureStorage.floatingButtonSizeDp = newSizeDp
+                // Immediately apply to in-memory overlay
+                FloatingSyncButtonManager.activeInstance?.updateSize(newSizeDp)
+                // Dispatch to foreground service
+                val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                    action = ClipSyncForegroundService.ACTION_UPDATE_FLOATING_CONFIG
+                    putExtra(ClipSyncForegroundService.EXTRA_FLOATING_SIZE_DP, newSizeDp)
+                }
+                ContextCompat.startForegroundService(this, intent)
+            }
+        }
+
+        switchIdleTransparency.isChecked = secureStorage.isFloatingButtonTransparencyEnabled
+        switchIdleTransparency.setOnCheckedChangeListener { _, isChecked ->
+            secureStorage.isFloatingButtonTransparencyEnabled = isChecked
+            // Immediately apply to in-memory overlay
+            FloatingSyncButtonManager.activeInstance?.updateTransparency(isChecked)
+            // Dispatch to foreground service
+            val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                action = ClipSyncForegroundService.ACTION_UPDATE_FLOATING_CONFIG
+                putExtra(ClipSyncForegroundService.EXTRA_FLOATING_TRANSPARENCY, isChecked)
             }
             ContextCompat.startForegroundService(this, intent)
         }

@@ -65,6 +65,14 @@ class SecureStorage(context: Context) {
         get() = prefs.getInt(KEY_FLOATING_BUTTON_Y, -1)
         set(value) = prefs.edit().putInt(KEY_FLOATING_BUTTON_Y, value).apply()
 
+    var floatingButtonSizeDp: Int
+        get() = prefs.getInt(KEY_FLOATING_BUTTON_SIZE_DP, 48)
+        set(value) = prefs.edit().putInt(KEY_FLOATING_BUTTON_SIZE_DP, value).apply()
+
+    var isFloatingButtonTransparencyEnabled: Boolean
+        get() = prefs.getBoolean(KEY_FLOATING_BUTTON_TRANSPARENCY_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_FLOATING_BUTTON_TRANSPARENCY_ENABLED, value).apply()
+
     fun hasCredentials(): Boolean {
         return deviceId.isNotEmpty() && token.isNotEmpty() && syncSalt.isNotEmpty()
     }
@@ -97,5 +105,7 @@ class SecureStorage(context: Context) {
         private const val KEY_FLOATING_BUTTON_ENABLED = "clipsync_floating_button_enabled"
         private const val KEY_FLOATING_BUTTON_X = "clipsync_floating_button_x"
         private const val KEY_FLOATING_BUTTON_Y = "clipsync_floating_button_y"
+        private const val KEY_FLOATING_BUTTON_SIZE_DP = "clipsync_floating_button_size_dp"
+        private const val KEY_FLOATING_BUTTON_TRANSPARENCY_ENABLED = "clipsync_floating_button_transparency_enabled"
     }
 }

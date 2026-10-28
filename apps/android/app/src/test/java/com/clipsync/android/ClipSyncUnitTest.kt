@@ -555,4 +555,121 @@ class ClipSyncUnitTest {
         assertEquals(screenWidth - orbSize, clampedX) // 1024
         assertEquals(screenHeight - orbSize - 48, clampedY) // 2296
     }
+
+    @Test
+    fun testAdjustableSizeNormalization() {
+        // Exact sizes
+        assertEquals(40, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(40))
+        assertEquals(48, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(48))
+        assertEquals(56, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(56))
+
+        // Out-of-range clamping
+        assertEquals(40, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(20))
+        assertEquals(40, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(39))
+        assertEquals(56, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(60))
+        assertEquals(56, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(100))
+
+        // Intermediate values default to 48 (medium)
+        assertEquals(48, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(45))
+        assertEquals(48, com.clipsync.android.overlay.FloatingOverlayCalculator.normalizeSize(50))
+    }
+
+    @Test
+    fun testAdjustableSizeIconScaling() {
+        // Small (40 dp) -> 20 dp icon
+        assertEquals(20, com.clipsync.android.overlay.FloatingOverlayCalculator.getIconSizeDp(40))
+        // Medium (48 dp) -> 24 dp icon
+        assertEquals(24, com.clipsync.android.overlay.FloatingOverlayCalculator.getIconSizeDp(48))
+        // Large (56 dp) -> 28 dp icon
+        assertEquals(28, com.clipsync.android.overlay.FloatingOverlayCalculator.getIconSizeDp(56))
+    }
+
+    @Test
+    fun testClampingAndSnappingForAllSizes() {
+        val screenWidth = 1080
+        val screenHeight = 2400
+        val topInset = 36
+        val bottomInset = 48
+        val margin = 8
+
+        val sizes = listOf(40, 48, 56)
+        for (size in sizes) {
+            // Left snap
+            val leftSnap = com.clipsync.android.overlay.FloatingOverlayCalculator.computeSnapTargetX(
+                currentX = 10,
+                buttonWidth = size,
+                screenWidth = screenWidth,
+                margin = margin
+            )
+            assertEquals(margin, leftSnap)
+
+            // Right snap
+            val rightSnap = com.clipsync.android.overlay.FloatingOverlayCalculator.computeSnapTargetX(
+                currentX = screenWidth - size - 10,
+                buttonWidth = size,
+                screenWidth = screenWidth,
+                margin = margin
+            )
+            assertEquals(screenWidth - size - margin, rightSnap)
+
+            // Bottom-right out of bounds clamping
+            val (clampedX, clampedY) = com.clipsync.android.overlay.FloatingOverlayCalculator.clampCoordinates(
+                x = 5000,
+                y = 5000,
+                buttonWidth = size,
+                buttonHeight = size,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                topInset = topInset,
+                bottomInset = bottomInset
+            )
+            assertEquals(screenWidth - size, clampedX)
+            assertEquals(screenHeight - size - bottomInset, clampedY)
+
+            // Top-left out of bounds clamping
+            val (clampedMinX, clampedMinY) = com.clipsync.android.overlay.FloatingOverlayCalculator.clampCoordinates(
+                x = -500,
+                y = -500,
+                buttonWidth = size,
+                buttonHeight = size,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                topInset = topInset,
+                bottomInset = bottomInset
+            )
+            assertEquals(0, clampedMinX)
+            assertEquals(topInset, clampedMinY)
+        }
+    }
+
+    @Test
+    fun testAdaptiveTransparencyConstants() {
+        assertEquals(0.40f, com.clipsync.android.overlay.FloatingOverlayCalculator.DEFAULT_IDLE_ALPHA, 0.001f)
+        assertEquals(1.0f, com.clipsync.android.overlay.FloatingOverlayCalculator.FULL_ALPHA, 0.001f)
+        assertEquals(2500L, com.clipsync.android.overlay.FloatingOverlayCalculator.IDLE_FADE_DELAY_MS)
+        assertEquals(400L, com.clipsync.android.overlay.FloatingOverlayCalculator.FADE_DURATION_MS)
+    }
+
+    @Test
+    fun testFloatingConfigServiceActionsAndExtras() {
+        assertEquals("com.clipsync.action.UPDATE_FLOATING_CONFIG", ClipSyncForegroundService.ACTION_UPDATE_FLOATING_CONFIG)
+        assertEquals("extra_floating_size_dp", ClipSyncForegroundService.EXTRA_FLOATING_SIZE_DP)
+        assertEquals("extra_floating_transparency", ClipSyncForegroundService.EXTRA_FLOATING_TRANSPARENCY)
+    }
+
+    @Test
+    fun testDragVsTapDetection() {
+        val touchSlop = 24
+
+        // Movement within touch slop is a TAP (not a drag)
+        assertFalse(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(0f, 0f, touchSlop))
+        assertFalse(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(10f, 10f, touchSlop)) // hypot = 14.14 < 24
+        assertFalse(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(20f, 0f, touchSlop)) // 20 < 24
+
+        // Movement beyond touch slop is a DRAG
+        assertTrue(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(25f, 0f, touchSlop))
+        assertTrue(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(18f, 18f, touchSlop)) // hypot = 25.45 > 24
+        assertTrue(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(0f, 30f, touchSlop))
+    }
 }
+

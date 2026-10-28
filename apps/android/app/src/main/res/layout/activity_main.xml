@@ -159,52 +159,164 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
+                    android:orientation="vertical"
                     android:padding="16dp">
 
-                    <FrameLayout
-                        android:layout_width="44dp"
-                        android:layout_height="44dp"
-                        android:background="@drawable/bg_sync_core_orb"
-                        android:layout_marginEnd="12dp">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
 
-                        <ImageView
-                            android:layout_width="22dp"
-                            android:layout_height="22dp"
-                            android:layout_gravity="center"
-                            android:src="@drawable/ic_sync_core_arrows"
-                            android:contentDescription="Sync Core Icon" />
-                    </FrameLayout>
+                        <FrameLayout
+                            android:layout_width="44dp"
+                            android:layout_height="44dp"
+                            android:background="@drawable/bg_sync_core_orb"
+                            android:layout_marginEnd="12dp">
+
+                            <ImageView
+                                android:layout_width="22dp"
+                                android:layout_height="22dp"
+                                android:layout_gravity="center"
+                                android:src="@drawable/ic_sync_core_arrows"
+                                android:contentDescription="Sync Core Icon" />
+                        </FrameLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Sync Core Floating Button"
+                                android:textColor="@color/text_primary"
+                                android:textSize="15sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="1-tap sync overlay that stays above other apps"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchFloatingButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp" />
+                    </LinearLayout>
 
                     <LinearLayout
-                        android:layout_width="0dp"
+                        android:id="@+id/layoutFloatingSubSettings"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
                         android:orientation="vertical">
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginTop="12dp"
+                            android:layout_marginBottom="12dp"
+                            android:background="@color/border_color" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Sync Core Floating Button"
+                            android:text="Button Size"
                             android:textColor="@color/text_primary"
-                            android:textSize="15sp"
+                            android:textSize="13sp"
                             android:textStyle="bold" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="1-tap sync overlay that stays above other apps"
+                            android:layout_marginBottom="8dp"
+                            android:text="Adjust diameter to balance visibility and screen obstruction"
                             android:textColor="@color/text_secondary"
-                            android:textSize="12sp" />
-                    </LinearLayout>
+                            android:textSize="11sp" />
 
-                    <com.google.android.material.materialswitch.MaterialSwitch
-                        android:id="@+id/switchFloatingButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp" />
+                        <com.google.android.material.button.MaterialButtonToggleGroup
+                            android:id="@+id/groupButtonSize"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            app:singleSelection="true"
+                            app:selectionRequired="true">
+
+                            <Button
+                                android:id="@+id/btnSizeSmall"
+                                style="?attr/materialButtonOutlinedStyle"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Small · 40 dp"
+                                android:textSize="12sp"
+                                android:textAllCaps="false" />
+
+                            <Button
+                                android:id="@+id/btnSizeMedium"
+                                style="?attr/materialButtonOutlinedStyle"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Medium · 48 dp"
+                                android:textSize="12sp"
+                                android:textAllCaps="false" />
+
+                            <Button
+                                android:id="@+id/btnSizeLarge"
+                                style="?attr/materialButtonOutlinedStyle"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Large · 56 dp"
+                                android:textSize="12sp"
+                                android:textAllCaps="false" />
+                        </com.google.android.material.button.MaterialButtonToggleGroup>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="12dp">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Idle Transparency"
+                                    android:textColor="@color/text_primary"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="Subtly fade orb to 40% when inactive; restores full opacity on touch"
+                                    android:textColor="@color/text_secondary"
+                                    android:textSize="11sp" />
+                            </LinearLayout>
+
+                            <com.google.android.material.materialswitch.MaterialSwitch
+                                android:id="@+id/switchIdleTransparency"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp" />
+                        </LinearLayout>
+                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

@@ -161,6 +161,16 @@ class ClipSyncForegroundService : Service() {
                     }
                     updateNotification("ClipSync Active — Ready to sync")
                 }
+                ACTION_UPDATE_FLOATING_CONFIG -> {
+                    if (it.hasExtra(EXTRA_FLOATING_SIZE_DP)) {
+                        val sizeDp = it.getIntExtra(EXTRA_FLOATING_SIZE_DP, secureStorage.floatingButtonSizeDp)
+                        floatingButtonManager.updateSize(sizeDp)
+                    }
+                    if (it.hasExtra(EXTRA_FLOATING_TRANSPARENCY)) {
+                        val transparency = it.getBooleanExtra(EXTRA_FLOATING_TRANSPARENCY, secureStorage.isFloatingButtonTransparencyEnabled)
+                        floatingButtonManager.updateTransparency(transparency)
+                    }
+                }
             }
 
             if (it.hasExtra(EXTRA_OUTBOUND_TEXT)) {
@@ -715,6 +725,9 @@ class ClipSyncForegroundService : Service() {
         const val ACTION_SHOW_FLOATING_BUTTON = "com.clipsync.action.SHOW_FLOATING_BUTTON"
         const val ACTION_HIDE_FLOATING_BUTTON = "com.clipsync.action.HIDE_FLOATING_BUTTON"
         const val ACTION_TOGGLE_FLOATING_BUTTON = "com.clipsync.action.TOGGLE_FLOATING_BUTTON"
+        const val ACTION_UPDATE_FLOATING_CONFIG = "com.clipsync.action.UPDATE_FLOATING_CONFIG"
+        const val EXTRA_FLOATING_SIZE_DP = "extra_floating_size_dp"
+        const val EXTRA_FLOATING_TRANSPARENCY = "extra_floating_transparency"
 
         const val ACTION_ITEM_RECEIVED = "com.clipsync.ITEM_RECEIVED"
         const val ACTION_CONNECTION_STATE = "com.clipsync.CONNECTION_STATE"
