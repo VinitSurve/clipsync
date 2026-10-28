@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Outer Vibrant Green Glow Halo -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#4800F5A0" />
+        </shape>
+    </item>
+
+    <!-- Outer Green Rim -->
+    <item
+        android:bottom="2dp"
+        android:left="2dp"
+        android:right="2dp"
+        android:top="2dp">
+        <shape android:shape="oval">
+            <solid android:color="#142C24" />
+            <stroke
+                android:width="1.8dp"
+                android:color="#00F5A0" />
+        </shape>
+    </item>
+
+    <!-- Deep Dark Surface with Mint Gradient -->
+    <item
+        android:bottom="3dp"
+        android:left="3dp"
+        android:right="3dp"
+        android:top="3dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="26dp"
+                android:startColor="#16382B"
+                android:endColor="#0B0F19" />
+        </shape>
+    </item>
+</layer-list>

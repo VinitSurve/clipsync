@@ -629,7 +629,7 @@ class ClipSyncForegroundService : Service() {
             toggleBallIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val ballActionTitle = if (::floatingButtonManager.isInitialized && floatingButtonManager.isAttached) "Hide Ball" else "Show Ball"
+        val syncCoreActionTitle = if (::floatingButtonManager.isInitialized && floatingButtonManager.isAttached) "Hide Sync Core" else "Show Sync Core"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("ClipSync — Tap to Sync to Mac")
@@ -637,7 +637,7 @@ class ClipSyncForegroundService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_agenda)
             .setContentIntent(syncPendingIntent)
             .addAction(android.R.drawable.ic_menu_send, "Sync to Mac", syncPendingIntent)
-            .addAction(android.R.drawable.ic_menu_manage, ballActionTitle, toggleBallPendingIntent)
+            .addAction(android.R.drawable.ic_menu_manage, syncCoreActionTitle, toggleBallPendingIntent)
             .setOngoing(true)
             .build()
     }

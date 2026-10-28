@@ -9,14 +9,14 @@
     android:clipToPadding="false"
     android:padding="4dp">
 
-    <!-- Ephemeral Feedback Badge ("Synced to Mac", "Empty", "Offline") -->
+    <!-- Ephemeral Feedback Badge ("Synced to Mac", "Clipboard empty", etc.) -->
     <TextView
         android:id="@+id/txtFeedbackBadge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginHorizontal="6dp"
+        android:layout_marginHorizontal="8dp"
         android:background="@drawable/bg_floating_badge"
-        android:elevation="10dp"
+        android:elevation="12dp"
         android:singleLine="true"
         android:text="Synced to Mac"
         android:textColor="#FFFFFF"
@@ -24,14 +24,24 @@
         android:textStyle="bold"
         android:visibility="gone" />
 
-    <!-- Tennis Ball Floating Button -->
-    <ImageView
-        android:id="@+id/imgTennisBall"
-        android:layout_width="52dp"
-        android:layout_height="52dp"
+    <!-- Sync Core Floating Orb -->
+    <FrameLayout
+        android:id="@+id/orbSyncCore"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center"
+        android:background="@drawable/bg_sync_core_orb"
         android:contentDescription="Sync clipboard to Mac"
-        android:elevation="8dp"
-        android:importantForAccessibility="yes"
-        android:src="@drawable/ic_tennis_ball" />
+        android:elevation="10dp"
+        android:importantForAccessibility="yes">
+
+        <!-- Central Icon (Sync Arrows / Checkmark / Error) -->
+        <ImageView
+            android:id="@+id/imgSyncCoreIcon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_sync_core_arrows" />
+    </FrameLayout>
 
 </LinearLayout>

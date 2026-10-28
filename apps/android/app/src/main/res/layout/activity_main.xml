@@ -145,7 +145,7 @@
                     app:cornerRadius="8dp" />
             </LinearLayout>
 
-            <!-- Floating Tennis Ball Sync Card -->
+            <!-- Sync Core Floating Button Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -163,12 +163,19 @@
                     android:gravity="center_vertical"
                     android:padding="16dp">
 
-                    <ImageView
+                    <FrameLayout
                         android:layout_width="44dp"
                         android:layout_height="44dp"
-                        android:src="@drawable/ic_tennis_ball"
-                        android:contentDescription="Tennis Ball Icon"
-                        android:layout_marginEnd="12dp" />
+                        android:background="@drawable/bg_sync_core_orb"
+                        android:layout_marginEnd="12dp">
+
+                        <ImageView
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:layout_gravity="center"
+                            android:src="@drawable/ic_sync_core_arrows"
+                            android:contentDescription="Sync Core Icon" />
+                    </FrameLayout>
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -179,7 +186,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Floating Tennis Ball Sync"
+                            android:text="Sync Core Floating Button"
                             android:textColor="@color/text_primary"
                             android:textSize="15sp"
                             android:textStyle="bold" />

@@ -417,9 +417,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showOverlayPermissionDialog() {
         AlertDialog.Builder(this)
-            .setTitle("Enable Floating Sync Button")
+            .setTitle("Enable Sync Core Floating Button")
             .setMessage(
-                "To display the tennis-ball button above other apps so you can 1-tap sync copied text from SwiftKey (or any app) to your Mac, Android requires the 'Display over other apps' permission.\n\nTap Continue to grant this permission in Android Settings."
+                "To display the Sync Core orb above other apps so you can 1-tap sync copied text from SwiftKey (or any app) to your Mac, Android requires the 'Display over other apps' permission.\n\nTap Continue to grant this permission in Android Settings."
             )
             .setPositiveButton("Continue") { _, _ ->
                 try {

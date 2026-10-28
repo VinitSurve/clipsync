@@ -20,7 +20,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -31,60 +33,78 @@ import com.clipsync.android.ui.ClipSyncCaptureActivity
 import kotlin.math.hypot
 
 /**
- * Manages the floating Tennis Ball overlay button.
+ * Manages the Sync Core floating button overlay.
  *
- * Requirements:
- * 1. Uses WindowManager with TYPE_APPLICATION_OVERLAY and FLAG_NOT_FOCUSABLE.
- * 2. Draggable and snaps to the nearest screen edge.
- * 3. Distinguishes drag from tap using ViewConfiguration touch slop.
- * 4. Tap launches ClipSyncCaptureActivity (ACTION_SYNC_TO_MAC) to gain window focus
+ * Requirements & Architecture:
+ * 1. Compact 56dp circular orb with dark charcoal surface, subtle teal rim, and mint sync symbol.
+ * 2. Uses WindowManager with TYPE_APPLICATION_OVERLAY and FLAG_NOT_FOCUSABLE.
+ * 3. Draggable and snaps to the nearest screen edge.
+ * 4. Distinguishes drag from tap using ViewConfiguration touch slop.
+ * 5. Distinct visual states:
+ *    - IDLE: Static mint sync arrows, no battery-wasting animation.
+ *    - PRESSED: Subtle scale-down feedback.
+ *    - SYNCING: Smooth rotation while transmitting clipboard to Mac.
+ *    - SUCCESS: Glowing green rim with checkmark and "Synced to Mac" badge.
+ *    - ERROR: Glowing red rim with exclamation mark and concise error badge.
+ * 6. Tap launches ClipSyncCaptureActivity (ACTION_SYNC_TO_MAC) to gain window focus
  *    and read primaryClip without opening MainActivity.
- * 5. Provides visual feedback (scale bounce + ephemeral status badge).
- * 6. Handles configuration changes, screen bounds, and safe lifecycle attachment.
+ * 7. Handles configuration changes, screen bounds, edge insets, and safe lifecycle attachment.
  */
 class FloatingSyncButtonManager(
     private val context: Context,
     private val secureStorage: SecureStorage
 ) {
 
+    enum class SyncState {
+        IDLE,
+        SYNCING,
+        SUCCESS,
+        ERROR
+    }
+
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var overlayView: View? = null
     private var containerFloating: LinearLayout? = null
-    private var imgTennisBall: ImageView? = null
+    private var orbSyncCore: FrameLayout? = null
+    private var imgSyncCoreIcon: ImageView? = null
     private var txtFeedbackBadge: TextView? = null
 
     private var layoutParams: WindowManager.LayoutParams? = null
     var isAttached: Boolean = false
         private set
 
-    // Saved position of the tennis ball itself (x, y)
-    private var currentBallX: Int = 0
-    private var currentBallY: Int = 0
+    var currentState: SyncState = SyncState.IDLE
+        private set
+
+    // Saved position of the orb itself (x, y)
+    private var currentOrbX: Int = 0
+    private var currentOrbY: Int = 0
     private var isSnappedToRight: Boolean = true
 
-    private var isSyncing: Boolean = false
     private var lastSyncTime: Long = 0L
 
     private var snapAnimator: ValueAnimator? = null
+    private var syncRotateAnimator: ValueAnimator? = null
     private var badgeFadeRunnable: Runnable? = null
+    private var stateResetRunnable: Runnable? = null
 
     init {
         activeInstance = this
     }
 
     /**
-     * Shows the floating tennis ball overlay if permission is granted and not already attached.
+     * Shows the Sync Core floating button overlay if permission is granted and not already attached.
      */
     fun show() {
         if (isAttached) {
-            Log.d(TAG, "Floating button already attached")
+            Log.d(TAG, "Sync Core already attached")
             return
         }
 
         if (!Settings.canDrawOverlays(context)) {
-            Log.w(TAG, "Cannot show floating button: SYSTEM_ALERT_WINDOW permission not granted")
+            Log.w(TAG, "Cannot show Sync Core: SYSTEM_ALERT_WINDOW permission not granted")
             return
         }
 
@@ -92,14 +112,14 @@ class FloatingSyncButtonManager(
             try {
                 createAndAttachView()
             } catch (e: Exception) {
-                Log.e(TAG, "Error attaching floating button overlay: ${e.message}", e)
+                Log.e(TAG, "Error attaching Sync Core overlay: ${e.message}", e)
                 isAttached = false
             }
         }
     }
 
     /**
-     * Hides and removes the floating button overlay from the WindowManager.
+     * Hides and removes the Sync Core overlay from the WindowManager.
      */
     fun hide() {
         mainHandler.post {
@@ -107,22 +127,24 @@ class FloatingSyncButtonManager(
             if (isAttached && overlayView != null) {
                 try {
                     windowManager.removeView(overlayView)
-                    Log.i(TAG, "Floating button overlay removed successfully")
+                    Log.i(TAG, "Sync Core overlay removed successfully")
                 } catch (e: Exception) {
                     Log.w(TAG, "Error removing overlay view: ${e.message}")
                 }
             }
             overlayView = null
             containerFloating = null
-            imgTennisBall = null
+            orbSyncCore = null
+            imgSyncCoreIcon = null
             txtFeedbackBadge = null
             layoutParams = null
             isAttached = false
+            currentState = SyncState.IDLE
         }
     }
 
     /**
-     * Clean up resources and animators.
+     * Clean up resources, animators, and static references.
      */
     fun destroy() {
         if (activeInstance === this) {
@@ -143,10 +165,10 @@ class FloatingSyncButtonManager(
             val screenWidth = metrics.widthPixels
             val screenHeight = metrics.heightPixels
 
-            val buttonSize = dpToPx(60)
+            val buttonSize = dpToPx(56)
             val clamped = FloatingOverlayCalculator.clampCoordinates(
-                x = currentBallX,
-                y = currentBallY,
+                x = currentOrbX,
+                y = currentOrbY,
                 buttonWidth = buttonSize,
                 buttonHeight = buttonSize,
                 screenWidth = screenWidth,
@@ -155,7 +177,6 @@ class FloatingSyncButtonManager(
                 bottomInset = dpToPx(48)
             )
 
-            // Re-snap to closest edge in the new orientation
             val snappedX = FloatingOverlayCalculator.computeSnapTargetX(
                 currentX = clamped.first,
                 buttonWidth = buttonSize,
@@ -163,19 +184,19 @@ class FloatingSyncButtonManager(
                 margin = dpToPx(8)
             )
 
-            currentBallX = snappedX
-            currentBallY = clamped.second
-            isSnappedToRight = (currentBallX + buttonSize / 2 >= screenWidth / 2)
+            currentOrbX = snappedX
+            currentOrbY = clamped.second
+            isSnappedToRight = (currentOrbX + buttonSize / 2 >= screenWidth / 2)
 
             updateContainerChildOrder()
 
-            params.x = currentBallX
-            params.y = currentBallY
+            params.x = currentOrbX
+            params.y = currentOrbY
 
             try {
                 windowManager.updateViewLayout(overlayView, params)
-                secureStorage.floatingButtonX = currentBallX
-                secureStorage.floatingButtonY = currentBallY
+                secureStorage.floatingButtonX = currentOrbX
+                secureStorage.floatingButtonY = currentOrbY
             } catch (e: Exception) {
                 Log.w(TAG, "Could not update overlay layout on config change: ${e.message}")
             }
@@ -186,17 +207,18 @@ class FloatingSyncButtonManager(
         if (isAttached) return
 
         val inflater = LayoutInflater.from(context)
-        val view = inflater.inflate(R.layout.layout_floating_tennis_ball, null)
+        val view = inflater.inflate(R.layout.layout_floating_sync_core, null)
         overlayView = view
 
         containerFloating = view.findViewById(R.id.containerFloating)
-        imgTennisBall = view.findViewById(R.id.imgTennisBall)
+        orbSyncCore = view.findViewById(R.id.orbSyncCore)
+        imgSyncCoreIcon = view.findViewById(R.id.imgSyncCoreIcon)
         txtFeedbackBadge = view.findViewById(R.id.txtFeedbackBadge)
 
         val metrics = context.resources.displayMetrics
         val screenWidth = metrics.widthPixels
         val screenHeight = metrics.heightPixels
-        val buttonSize = dpToPx(60)
+        val buttonSize = dpToPx(56)
 
         // Load saved coordinates or initialize near right edge
         val savedX = secureStorage.floatingButtonX
@@ -214,9 +236,9 @@ class FloatingSyncButtonManager(
             screenHeight / 3
         }
 
-        currentBallX = initialX
-        currentBallY = initialY
-        isSnappedToRight = (currentBallX + buttonSize / 2 >= screenWidth / 2)
+        currentOrbX = initialX
+        currentOrbY = initialY
+        isSnappedToRight = (currentOrbX + buttonSize / 2 >= screenWidth / 2)
 
         updateContainerChildOrder()
 
@@ -236,36 +258,37 @@ class FloatingSyncButtonManager(
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = currentBallX
-            y = currentBallY
+            x = currentOrbX
+            y = currentOrbY
         }
         layoutParams = params
 
-        setupTouchListener(imgTennisBall!!, params)
+        setupTouchListener(orbSyncCore!!, params)
 
         windowManager.addView(view, params)
         isAttached = true
-        Log.i(TAG, "Floating button attached at x=$currentBallX, y=$currentBallY (isRight=$isSnappedToRight)")
+        applyState(SyncState.IDLE)
+        Log.i(TAG, "Sync Core attached at x=$currentOrbX, y=$currentOrbY (isRight=$isSnappedToRight)")
     }
 
     private fun updateContainerChildOrder() {
         val container = containerFloating ?: return
-        val ball = imgTennisBall ?: return
+        val orb = orbSyncCore ?: return
         val badge = txtFeedbackBadge ?: return
 
         container.removeAllViews()
         if (isSnappedToRight) {
-            // Ball on right edge: [Badge] [Ball]
+            // Orb on right edge: [Badge] [Orb]
             container.addView(badge)
-            container.addView(ball)
+            container.addView(orb)
         } else {
-            // Ball on left edge: [Ball] [Badge]
-            container.addView(ball)
+            // Orb on left edge: [Orb] [Badge]
+            container.addView(orb)
             container.addView(badge)
         }
     }
 
-    private fun setupTouchListener(ballView: View, params: WindowManager.LayoutParams) {
+    private fun setupTouchListener(orbView: View, params: WindowManager.LayoutParams) {
         val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
         var initialX = 0
         var initialY = 0
@@ -273,18 +296,25 @@ class FloatingSyncButtonManager(
         var initialTouchY = 0f
         var isDragging = false
 
-        ballView.setOnTouchListener { _, event ->
+        orbView.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     cancelAnimators()
-                    // Hide any active badge immediately when touched
                     txtFeedbackBadge?.visibility = View.GONE
 
-                    initialX = currentBallX
-                    initialY = currentBallY
+                    initialX = currentOrbX
+                    initialY = currentOrbY
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     isDragging = false
+
+                    if (currentState != SyncState.SYNCING && areAnimationsEnabled()) {
+                        orbView.animate()
+                            .scaleX(0.90f)
+                            .scaleY(0.90f)
+                            .setDuration(75)
+                            .start()
+                    }
                     true
                 }
 
@@ -294,11 +324,12 @@ class FloatingSyncButtonManager(
 
                     if (!isDragging && FloatingOverlayCalculator.isDragGesture(dx, dy, touchSlop)) {
                         isDragging = true
+                        orbView.animate().scaleX(1.0f).scaleY(1.0f).setDuration(75).start()
                     }
 
                     if (isDragging) {
                         val metrics = context.resources.displayMetrics
-                        val buttonSize = dpToPx(60)
+                        val buttonSize = dpToPx(56)
                         val clamped = FloatingOverlayCalculator.clampCoordinates(
                             x = initialX + dx.toInt(),
                             y = initialY + dy.toInt(),
@@ -310,10 +341,10 @@ class FloatingSyncButtonManager(
                             bottomInset = dpToPx(48)
                         )
 
-                        currentBallX = clamped.first
-                        currentBallY = clamped.second
-                        params.x = currentBallX
-                        params.y = currentBallY
+                        currentOrbX = clamped.first
+                        currentOrbY = clamped.second
+                        params.x = currentOrbX
+                        params.y = currentOrbY
 
                         try {
                             windowManager.updateViewLayout(overlayView, params)
@@ -323,23 +354,41 @@ class FloatingSyncButtonManager(
                 }
 
                 MotionEvent.ACTION_UP -> {
+                    if (areAnimationsEnabled()) {
+                        orbView.animate()
+                            .scaleX(1.0f)
+                            .scaleY(1.0f)
+                            .setInterpolator(OvershootInterpolator(1.4f))
+                            .setDuration(160)
+                            .start()
+                    } else {
+                        orbView.scaleX = 1.0f
+                        orbView.scaleY = 1.0f
+                    }
+
                     if (!isDragging) {
                         // Deliberate TAP: Initiate sync
-                        handleBallTap()
+                        handleOrbTap()
                     } else {
                         // Drag completed: Snap to screen edge smoothly
                         val metrics = context.resources.displayMetrics
                         val screenWidth = metrics.widthPixels
-                        val buttonSize = dpToPx(60)
+                        val buttonSize = dpToPx(56)
 
                         val targetX = FloatingOverlayCalculator.computeSnapTargetX(
-                            currentX = currentBallX,
+                            currentX = currentOrbX,
                             buttonWidth = buttonSize,
                             screenWidth = screenWidth,
                             margin = dpToPx(8)
                         )
-                        animateSnap(currentBallX, targetX, params)
+                        animateSnap(currentOrbX, targetX, params)
                     }
+                    isDragging = false
+                    true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    orbView.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start()
                     isDragging = false
                     true
                 }
@@ -349,19 +398,18 @@ class FloatingSyncButtonManager(
         }
     }
 
-    private fun handleBallTap() {
+    private fun handleOrbTap() {
         val now = SystemClock.elapsedRealtime()
-        if (isSyncing || now - lastSyncTime < 600L) {
+        if (currentState == SyncState.SYNCING || now - lastSyncTime < 600L) {
             Log.d(TAG, "Ignoring tap: sync already in progress or debounced")
             return
         }
         lastSyncTime = now
-        isSyncing = true
 
-        Log.i(TAG, "Floating tennis ball tapped — triggering 1-tap clipboard sync")
+        Log.i(TAG, "Sync Core tapped — initiating 1-tap clipboard sync")
 
-        // 1. Play tactile squash & bounce animation on the tennis ball
-        playBallBounceAnimation()
+        // 1. Enter SYNCING state with subtle rotation animation
+        applyState(SyncState.SYNCING)
 
         // 2. Launch translucent ClipSyncCaptureActivity to obtain window focus and capture primaryClip
         try {
@@ -374,35 +422,132 @@ class FloatingSyncButtonManager(
         } catch (e: Exception) {
             Log.e(TAG, "Could not start capture activity from overlay: ${e.message}")
             showFeedbackBadge("Sync error", isSuccess = false)
-            isSyncing = false
+            applyState(SyncState.ERROR)
             return
         }
 
-        // Release mutex after a safety timeout
+        // Safety timeout in case no result notification arrives
         mainHandler.postDelayed({
-            isSyncing = false
-        }, 1200L)
+            if (currentState == SyncState.SYNCING) {
+                applyState(SyncState.IDLE)
+            }
+        }, 3000L)
     }
 
-    private fun playBallBounceAnimation() {
-        val ball = imgTennisBall ?: return
+    /**
+     * Applies a specific visual state to the Sync Core orb.
+     */
+    fun applyState(state: SyncState) {
+        mainHandler.post {
+            currentState = state
+            val orb = orbSyncCore ?: return@post
+            val icon = imgSyncCoreIcon ?: return@post
+
+            stateResetRunnable?.let { mainHandler.removeCallbacks(it) }
+
+            when (state) {
+                SyncState.IDLE -> {
+                    stopRotationAnimation()
+                    orb.setBackgroundResource(R.drawable.bg_sync_core_orb)
+                    icon.setImageResource(R.drawable.ic_sync_core_arrows)
+                    icon.rotation = 0f
+                    icon.scaleX = 1f
+                    icon.scaleY = 1f
+                }
+
+                SyncState.SYNCING -> {
+                    orb.setBackgroundResource(R.drawable.bg_sync_core_orb)
+                    icon.setImageResource(R.drawable.ic_sync_core_arrows)
+                    startRotationAnimation()
+                }
+
+                SyncState.SUCCESS -> {
+                    stopRotationAnimation()
+                    orb.setBackgroundResource(R.drawable.bg_sync_core_orb_success)
+                    icon.setImageResource(R.drawable.ic_sync_core_check)
+                    icon.rotation = 0f
+
+                    if (areAnimationsEnabled()) {
+                        orb.scaleX = 0.92f
+                        orb.scaleY = 0.92f
+                        orb.animate()
+                            .scaleX(1.0f)
+                            .scaleY(1.0f)
+                            .setInterpolator(OvershootInterpolator(2.0f))
+                            .setDuration(220)
+                            .start()
+                    }
+
+                    // Schedule return to idle after 2 seconds
+                    stateResetRunnable = Runnable {
+                        applyState(SyncState.IDLE)
+                    }
+                    mainHandler.postDelayed(stateResetRunnable!!, 2000L)
+                }
+
+                SyncState.ERROR -> {
+                    stopRotationAnimation()
+                    orb.setBackgroundResource(R.drawable.bg_sync_core_orb_error)
+                    icon.setImageResource(R.drawable.ic_sync_core_error)
+                    icon.rotation = 0f
+
+                    if (areAnimationsEnabled()) {
+                        playWobbleAnimation(orb)
+                    }
+
+                    // Schedule return to idle after 2 seconds
+                    stateResetRunnable = Runnable {
+                        applyState(SyncState.IDLE)
+                    }
+                    mainHandler.postDelayed(stateResetRunnable!!, 2000L)
+                }
+            }
+        }
+    }
+
+    private fun startRotationAnimation() {
+        stopRotationAnimation()
+        val icon = imgSyncCoreIcon ?: return
         if (!areAnimationsEnabled()) return
 
-        ball.animate().cancel()
-        ball.scaleX = 1f
-        ball.scaleY = 1f
+        syncRotateAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
+            duration = 850
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener { animator ->
+                icon.rotation = animator.animatedValue as Float
+            }
+            start()
+        }
+    }
 
-        // Squash to 0.82 and bounce back with overshoot
-        ball.animate()
-            .scaleX(0.82f)
-            .scaleY(0.82f)
-            .setDuration(90)
+    private fun stopRotationAnimation() {
+        syncRotateAnimator?.cancel()
+        syncRotateAnimator = null
+        imgSyncCoreIcon?.rotation = 0f
+    }
+
+    private fun playWobbleAnimation(view: View) {
+        view.translationX = 0f
+        view.animate()
+            .translationX(-dpToPx(4).toFloat())
+            .setDuration(50)
             .withEndAction {
-                ball.animate()
-                    .scaleX(1.0f)
-                    .scaleY(1.0f)
-                    .setInterpolator(OvershootInterpolator(2.2f))
-                    .setDuration(220)
+                view.animate()
+                    .translationX(dpToPx(4).toFloat())
+                    .setDuration(60)
+                    .withEndAction {
+                        view.animate()
+                            .translationX(-dpToPx(2).toFloat())
+                            .setDuration(50)
+                            .withEndAction {
+                                view.animate()
+                                    .translationX(0f)
+                                    .setDuration(50)
+                                    .start()
+                            }
+                            .start()
+                    }
                     .start()
             }
             .start()
@@ -411,18 +556,18 @@ class FloatingSyncButtonManager(
     private fun animateSnap(startX: Int, endX: Int, params: WindowManager.LayoutParams) {
         val metrics = context.resources.displayMetrics
         val screenWidth = metrics.widthPixels
-        val buttonSize = dpToPx(60)
+        val buttonSize = dpToPx(56)
 
         isSnappedToRight = (endX + buttonSize / 2 >= screenWidth / 2)
         updateContainerChildOrder()
 
         if (!areAnimationsEnabled() || startX == endX) {
-            currentBallX = endX
+            currentOrbX = endX
             params.x = endX
             try {
                 windowManager.updateViewLayout(overlayView, params)
-                secureStorage.floatingButtonX = currentBallX
-                secureStorage.floatingButtonY = currentBallY
+                secureStorage.floatingButtonX = currentOrbX
+                secureStorage.floatingButtonY = currentOrbY
             } catch (_: Exception) {}
             return
         }
@@ -432,18 +577,18 @@ class FloatingSyncButtonManager(
             duration = 180
             interpolator = OvershootInterpolator(1.1f)
             addUpdateListener { animator ->
-                currentBallX = animator.animatedValue as Int
-                params.x = currentBallX
+                currentOrbX = animator.animatedValue as Int
+                params.x = currentOrbX
                 try {
                     windowManager.updateViewLayout(overlayView, params)
                 } catch (_: Exception) {}
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
-                    currentBallX = endX
+                    currentOrbX = endX
                     params.x = endX
-                    secureStorage.floatingButtonX = currentBallX
-                    secureStorage.floatingButtonY = currentBallY
+                    secureStorage.floatingButtonX = currentOrbX
+                    secureStorage.floatingButtonY = currentOrbY
                 }
             })
             start()
@@ -451,7 +596,7 @@ class FloatingSyncButtonManager(
     }
 
     /**
-     * Displays a small, non-intrusive feedback badge next to the tennis ball.
+     * Displays an ephemeral feedback badge next to the Sync Core orb.
      */
     fun showFeedbackBadge(text: String, isSuccess: Boolean) {
         mainHandler.post {
@@ -463,16 +608,16 @@ class FloatingSyncButtonManager(
 
             badge.text = text
             if (isSuccess) {
-                badge.setTextColor(Color.WHITE)
+                badge.setTextColor(Color.parseColor("#00F5A0")) // Mint Green
                 val bg = badge.background
                 if (bg != null) {
-                    DrawableCompat.setTint(bg.mutate(), Color.parseColor("#10B981")) // Emerald Green
+                    DrawableCompat.setTint(bg.mutate(), Color.parseColor("#0F2820"))
                 }
             } else {
-                badge.setTextColor(Color.WHITE)
+                badge.setTextColor(Color.parseColor("#FCA5A5")) // Soft Red
                 val bg = badge.background
                 if (bg != null) {
-                    DrawableCompat.setTint(bg.mutate(), Color.parseColor("#EF4444")) // Crimson Red
+                    DrawableCompat.setTint(bg.mutate(), Color.parseColor("#2E1317"))
                 }
             }
 
@@ -480,17 +625,17 @@ class FloatingSyncButtonManager(
             badge.alpha = 0f
 
             // Measure badge width to adjust layoutParams.x if snapped to right edge
-            // so the tennis ball remains perfectly stationary on screen
+            // so the Sync Core orb remains perfectly stationary on screen
             badge.measure(
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
             )
-            val badgeTotalWidth = badge.measuredWidth + dpToPx(12) // including horizontal margins
+            val badgeTotalWidth = badge.measuredWidth + dpToPx(16) // including horizontal margins
 
             if (isSnappedToRight) {
-                params.x = (currentBallX - badgeTotalWidth).coerceAtLeast(0)
+                params.x = (currentOrbX - badgeTotalWidth).coerceAtLeast(0)
             } else {
-                params.x = currentBallX
+                params.x = currentOrbX
             }
 
             try {
@@ -513,7 +658,7 @@ class FloatingSyncButtonManager(
                         .setDuration(200)
                         .withEndAction {
                             badge.visibility = View.GONE
-                            params.x = currentBallX
+                            params.x = currentOrbX
                             try {
                                 windowManager.updateViewLayout(view, params)
                             } catch (_: Exception) {}
@@ -521,7 +666,7 @@ class FloatingSyncButtonManager(
                         .start()
                 } else {
                     badge.visibility = View.GONE
-                    params.x = currentBallX
+                    params.x = currentOrbX
                     try {
                         windowManager.updateViewLayout(view, params)
                     } catch (_: Exception) {}
@@ -547,8 +692,11 @@ class FloatingSyncButtonManager(
     private fun cancelAnimators() {
         snapAnimator?.cancel()
         snapAnimator = null
+        stopRotationAnimation()
         badgeFadeRunnable?.let { mainHandler.removeCallbacks(it) }
         badgeFadeRunnable = null
+        stateResetRunnable?.let { mainHandler.removeCallbacks(it) }
+        stateResetRunnable = null
     }
 
     private fun dpToPx(dp: Int): Int {
@@ -566,7 +714,10 @@ class FloatingSyncButtonManager(
          * Global notification entry point for sync results.
          */
         fun notifySyncResult(isSuccess: Boolean, message: String) {
-            activeInstance?.showFeedbackBadge(message, isSuccess)
+            activeInstance?.let { manager ->
+                manager.showFeedbackBadge(message, isSuccess)
+                manager.applyState(if (isSuccess) SyncState.SUCCESS else SyncState.ERROR)
+            }
         }
     }
 }

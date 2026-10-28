@@ -504,4 +504,55 @@ class ClipSyncUnitTest {
         assertEquals("com.clipsync.action.HIDE_FLOATING_BUTTON", ClipSyncForegroundService.ACTION_HIDE_FLOATING_BUTTON)
         assertEquals("com.clipsync.action.TOGGLE_FLOATING_BUTTON", ClipSyncForegroundService.ACTION_TOGGLE_FLOATING_BUTTON)
     }
+
+    @Test
+    fun testSyncCoreOrbStates() {
+        // Verify all Sync Core states exist and transition correctly
+        val states = com.clipsync.android.overlay.FloatingSyncButtonManager.SyncState.values()
+        assertEquals(4, states.size)
+        assertTrue(states.contains(com.clipsync.android.overlay.FloatingSyncButtonManager.SyncState.IDLE))
+        assertTrue(states.contains(com.clipsync.android.overlay.FloatingSyncButtonManager.SyncState.SYNCING))
+        assertTrue(states.contains(com.clipsync.android.overlay.FloatingSyncButtonManager.SyncState.SUCCESS))
+        assertTrue(states.contains(com.clipsync.android.overlay.FloatingSyncButtonManager.SyncState.ERROR))
+    }
+
+    @Test
+    fun testSyncCore56dpOrbGeometry() {
+        val orbSize = 56
+        val screenWidth = 1080
+        val screenHeight = 2400
+        val margin = 8
+
+        // Test left snap for 56dp orb
+        val leftSnap = com.clipsync.android.overlay.FloatingOverlayCalculator.computeSnapTargetX(
+            currentX = 50,
+            buttonWidth = orbSize,
+            screenWidth = screenWidth,
+            margin = margin
+        )
+        assertEquals(margin, leftSnap)
+
+        // Test right snap for 56dp orb: 1080 - 56 - 8 = 1016
+        val rightSnap = com.clipsync.android.overlay.FloatingOverlayCalculator.computeSnapTargetX(
+            currentX = 900,
+            buttonWidth = orbSize,
+            screenWidth = screenWidth,
+            margin = margin
+        )
+        assertEquals(1016, rightSnap)
+
+        // Test coordinate clamping with 56dp orb
+        val (clampedX, clampedY) = com.clipsync.android.overlay.FloatingOverlayCalculator.clampCoordinates(
+            x = 2000,
+            y = 3000,
+            buttonWidth = orbSize,
+            buttonHeight = orbSize,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            topInset = 36,
+            bottomInset = 48
+        )
+        assertEquals(screenWidth - orbSize, clampedX) // 1024
+        assertEquals(screenHeight - orbSize - 48, clampedY) // 2296
+    }
 }

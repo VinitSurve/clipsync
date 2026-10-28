@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Outer Crimson Red Glow Halo -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#48EF4444" />
+        </shape>
+    </item>
+
+    <!-- Outer Red Rim -->
+    <item
+        android:bottom="2dp"
+        android:left="2dp"
+        android:right="2dp"
+        android:top="2dp">
+        <shape android:shape="oval">
+            <solid android:color="#2D1518" />
+            <stroke
+                android:width="1.8dp"
+                android:color="#EF4444" />
+        </shape>
+    </item>
+
+    <!-- Deep Dark Surface with Red Gradient -->
+    <item
+        android:bottom="3dp"
+        android:left="3dp"
+        android:right="3dp"
+        android:top="3dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="26dp"
+                android:startColor="#331418"
+                android:endColor="#0B0F19" />
+        </shape>
+    </item>
+</layer-list>

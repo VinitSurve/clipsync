@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="28dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <!-- Vertical Bar -->
+    <path
+        android:pathData="M 24,13 L 24,26"
+        android:fillColor="#00000000"
+        android:strokeColor="#EF4444"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round" />
+
+    <!-- Dot -->
+    <path
+        android:pathData="M 24,33.5 L 24,34.5"
+        android:fillColor="#00000000"
+        android:strokeColor="#EF4444"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round" />
+</vector>
