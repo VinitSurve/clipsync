@@ -117,6 +117,7 @@ class ClipSyncCaptureActivity : Activity() {
 
         if (!secureStorage.hasCredentials()) {
             Log.w(TAG, "[$syncId] Device not paired; cannot sync clipboard")
+            com.clipsync.android.overlay.FloatingSyncButtonManager.notifySyncResult(false, "Not paired")
             Toast.makeText(this, "ClipSync: Device not paired", Toast.LENGTH_SHORT).show()
         } else {
             try {
@@ -127,7 +128,13 @@ class ClipSyncCaptureActivity : Activity() {
 
                 Log.i(TAG, "[$syncId] Capture and sync executed with focus: hasClip=$hasClip, itemCount=$itemCount, textLen=${text?.length ?: 0}")
 
-                if (!text.isNullOrBlank()) {
+                if (text.isNullOrBlank()) {
+                    com.clipsync.android.overlay.FloatingSyncButtonManager.notifySyncResult(false, "Clipboard empty")
+                    Toast.makeText(this, "ClipSync: Clipboard is empty", Toast.LENGTH_SHORT).show()
+                } else if (text.length > 500_000) {
+                    com.clipsync.android.overlay.FloatingSyncButtonManager.notifySyncResult(false, "Text too large")
+                    Toast.makeText(this, "ClipSync: Text too large (>500KB)", Toast.LENGTH_SHORT).show()
+                } else {
                     val syncIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
                         putExtra(ClipSyncForegroundService.EXTRA_OUTBOUND_TEXT, text)
                         putExtra(ClipSyncForegroundService.EXTRA_IS_MANUAL, true)
@@ -136,11 +143,10 @@ class ClipSyncCaptureActivity : Activity() {
                     ContextCompat.startForegroundService(this, syncIntent)
                     val preview = if (text.length > 25) text.take(25) + "..." else text
                     Toast.makeText(this, "ClipSync: Synced to Mac (\"$preview\")", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "ClipSync: Clipboard is empty", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "[$syncId] Clipboard capture error: ${e.message}")
+                com.clipsync.android.overlay.FloatingSyncButtonManager.notifySyncResult(false, "Capture error")
                 Toast.makeText(this, "ClipSync capture error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }

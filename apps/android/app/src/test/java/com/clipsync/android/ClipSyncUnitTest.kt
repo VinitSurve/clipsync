@@ -388,4 +388,120 @@ class ClipSyncUnitTest {
         val laterHash = ClipSyncCrypto.sha256(laterCopy)
         assertFalse("Different local copy must not be blocked", ClipboardStateManager.isAlreadySynced(laterHash))
     }
+
+    @Test
+    fun testDragGestureThresholdDetection() {
+        val touchSlop = 16
+
+        // 1. Tiny jitter (dx=4, dy=3, hypot=5 <= 16): Must be treated as TAP, NOT DRAG
+        val isDragSmall = com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(4f, 3f, touchSlop)
+        assertFalse("Movements within touch slop must NOT be detected as drag", isDragSmall)
+
+        // 2. Exact threshold (dx=0, dy=16, hypot=16 <= 16): Still TAP
+        val isDragAtLimit = com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(0f, 16f, touchSlop)
+        assertFalse("Movement equal to touch slop is not a drag", isDragAtLimit)
+
+        // 3. Deliberate move (dx=15, dy=15, hypot=21.2 > 16): DRAG
+        val isDragLarge = com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(15f, 15f, touchSlop)
+        assertTrue("Movements exceeding touch slop must be detected as drag", isDragLarge)
+
+        // 4. Horizontal swipe (dx=40, dy=0): DRAG
+        assertTrue(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(40f, 0f, touchSlop))
+
+        // 5. Vertical swipe (dx=0, dy=40): DRAG
+        assertTrue(com.clipsync.android.overlay.FloatingOverlayCalculator.isDragGesture(0f, 40f, touchSlop))
+    }
+
+    @Test
+    fun testComputeSnapTargetX() {
+        val screenWidth = 1080
+        val buttonWidth = 60
+        val margin = 8
+
+        // 1. Ball on left side of screen (center = 100 + 30 = 130 < 540)
+        val leftSnap = com.clipsync.android.overlay.FloatingOverlayCalculator.computeSnapTargetX(
+            currentX = 100,
+            buttonWidth = buttonWidth,
+            screenWidth = screenWidth,
+            margin = margin
+        )
+        assertEquals(margin, leftSnap)
+
+        // 2. Ball on right side of screen (center = 800 + 30 = 830 >= 540)
+        val rightSnap = com.clipsync.android.overlay.FloatingOverlayCalculator.computeSnapTargetX(
+            currentX = 800,
+            buttonWidth = buttonWidth,
+            screenWidth = screenWidth,
+            margin = margin
+        )
+        assertEquals(screenWidth - buttonWidth - margin, rightSnap) // 1080 - 60 - 8 = 1012
+
+        // 3. Ball exactly at screen center (center = 510 + 30 = 540 >= 540) -> Snaps right
+        val centerSnap = com.clipsync.android.overlay.FloatingOverlayCalculator.computeSnapTargetX(
+            currentX = 510,
+            buttonWidth = buttonWidth,
+            screenWidth = screenWidth,
+            margin = margin
+        )
+        assertEquals(1012, centerSnap)
+    }
+
+    @Test
+    fun testClampCoordinates() {
+        val buttonWidth = 60
+        val buttonHeight = 60
+        val screenWidth = 1080
+        val screenHeight = 2400
+        val topInset = 36
+        val bottomInset = 48
+
+        // Normal within-bounds point
+        val (normX, normY) = com.clipsync.android.overlay.FloatingOverlayCalculator.clampCoordinates(
+            x = 200,
+            y = 500,
+            buttonWidth = buttonWidth,
+            buttonHeight = buttonHeight,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            topInset = topInset,
+            bottomInset = bottomInset
+        )
+        assertEquals(200, normX)
+        assertEquals(500, normY)
+
+        // Negative coordinates out-of-bounds
+        val (negX, negY) = com.clipsync.android.overlay.FloatingOverlayCalculator.clampCoordinates(
+            x = -150,
+            y = 10,
+            buttonWidth = buttonWidth,
+            buttonHeight = buttonHeight,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            topInset = topInset,
+            bottomInset = bottomInset
+        )
+        assertEquals(0, negX)
+        assertEquals(topInset, negY)
+
+        // Exceeding screen bounds
+        val (exceedX, exceedY) = com.clipsync.android.overlay.FloatingOverlayCalculator.clampCoordinates(
+            x = 1500,
+            y = 3000,
+            buttonWidth = buttonWidth,
+            buttonHeight = buttonHeight,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            topInset = topInset,
+            bottomInset = bottomInset
+        )
+        assertEquals(screenWidth - buttonWidth, exceedX) // 1020
+        assertEquals(screenHeight - buttonHeight - bottomInset, exceedY) // 2400 - 60 - 48 = 2292
+    }
+
+    @Test
+    fun testFloatingOverlayActionConstants() {
+        assertEquals("com.clipsync.action.SHOW_FLOATING_BUTTON", ClipSyncForegroundService.ACTION_SHOW_FLOATING_BUTTON)
+        assertEquals("com.clipsync.action.HIDE_FLOATING_BUTTON", ClipSyncForegroundService.ACTION_HIDE_FLOATING_BUTTON)
+        assertEquals("com.clipsync.action.TOGGLE_FLOATING_BUTTON", ClipSyncForegroundService.ACTION_TOGGLE_FLOATING_BUTTON)
+    }
 }

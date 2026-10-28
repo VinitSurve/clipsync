@@ -53,6 +53,18 @@ class SecureStorage(context: Context) {
         get() = prefs.getBoolean(KEY_IS_PAUSED, false)
         set(value) = prefs.edit().putBoolean(KEY_IS_PAUSED, value).apply()
 
+    var isFloatingButtonEnabled: Boolean
+        get() = prefs.getBoolean(KEY_FLOATING_BUTTON_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_FLOATING_BUTTON_ENABLED, value).apply()
+
+    var floatingButtonX: Int
+        get() = prefs.getInt(KEY_FLOATING_BUTTON_X, -1)
+        set(value) = prefs.edit().putInt(KEY_FLOATING_BUTTON_X, value).apply()
+
+    var floatingButtonY: Int
+        get() = prefs.getInt(KEY_FLOATING_BUTTON_Y, -1)
+        set(value) = prefs.edit().putInt(KEY_FLOATING_BUTTON_Y, value).apply()
+
     fun hasCredentials(): Boolean {
         return deviceId.isNotEmpty() && token.isNotEmpty() && syncSalt.isNotEmpty()
     }
@@ -82,5 +94,8 @@ class SecureStorage(context: Context) {
         private const val KEY_PASSPHRASE = "clipsync_passphrase"
         private const val KEY_DEVICE_LABEL = "clipsync_device_label"
         private const val KEY_IS_PAUSED = "clipsync_is_paused"
+        private const val KEY_FLOATING_BUTTON_ENABLED = "clipsync_floating_button_enabled"
+        private const val KEY_FLOATING_BUTTON_X = "clipsync_floating_button_x"
+        private const val KEY_FLOATING_BUTTON_Y = "clipsync_floating_button_y"
     }
 }

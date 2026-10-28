@@ -9,18 +9,21 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.clipsync.android.crypto.ClipSyncCrypto
 import com.clipsync.android.models.EncryptedPayloadEnvelope
 import com.clipsync.android.models.SyncItem
 import com.clipsync.android.models.SyncItemMetadata
+import com.clipsync.android.overlay.FloatingSyncButtonManager
 import com.clipsync.android.storage.SecureStorage
 import com.clipsync.android.ui.ClipSyncCaptureActivity
 import com.clipsync.android.ui.MainActivity
@@ -41,6 +44,7 @@ class ClipSyncForegroundService : Service() {
     private lateinit var connectivityManager: ConnectivityManager
     private lateinit var secureStorage: SecureStorage
     private lateinit var okHttpClient: OkHttpClient
+    private lateinit var floatingButtonManager: FloatingSyncButtonManager
 
     private var activeWebSocket: WebSocket? = null
     private var crypto: ClipSyncCrypto? = null
@@ -115,11 +119,50 @@ class ClipSyncForegroundService : Service() {
             .build()
 
         createNotificationChannel()
+
+        floatingButtonManager = FloatingSyncButtonManager(this, secureStorage)
+        if (secureStorage.isFloatingButtonEnabled && Settings.canDrawOverlays(this)) {
+            floatingButtonManager.show()
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        try {
+            floatingButtonManager.onConfigurationChanged(newConfig)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating floating overlay on config change: ${e.message}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
             val syncId = it.getStringExtra(EXTRA_SYNC_ID) ?: ("SVC-" + UUID.randomUUID().toString().take(6))
+            when (it.action) {
+                ACTION_SHOW_FLOATING_BUTTON -> {
+                    if (Settings.canDrawOverlays(this)) {
+                        secureStorage.isFloatingButtonEnabled = true
+                        floatingButtonManager.show()
+                        updateNotification("ClipSync Active — Ready to sync")
+                    }
+                }
+                ACTION_HIDE_FLOATING_BUTTON -> {
+                    secureStorage.isFloatingButtonEnabled = false
+                    floatingButtonManager.hide()
+                    updateNotification("ClipSync Active — Ready to sync")
+                }
+                ACTION_TOGGLE_FLOATING_BUTTON -> {
+                    if (floatingButtonManager.isAttached) {
+                        secureStorage.isFloatingButtonEnabled = false
+                        floatingButtonManager.hide()
+                    } else if (Settings.canDrawOverlays(this)) {
+                        secureStorage.isFloatingButtonEnabled = true
+                        floatingButtonManager.show()
+                    }
+                    updateNotification("ClipSync Active — Ready to sync")
+                }
+            }
+
             if (it.hasExtra(EXTRA_OUTBOUND_TEXT)) {
                 val outbound = it.getStringExtra(EXTRA_OUTBOUND_TEXT)
                 if (!outbound.isNullOrBlank()) {
@@ -424,6 +467,7 @@ class ClipSyncForegroundService : Service() {
         if (!isConnected || ws == null) {
             Log.i(TAG, "[$corrId] WebSocket not connected ($currentConnectionState). Buffered text for transmission upon connect.")
             pendingOutboundText = text
+            FloatingSyncButtonManager.notifySyncResult(false, "Offline — Queued")
             if (!isExplicitlyStopped && secureStorage.hasCredentials() && currentConnectionState != STATE_CONNECTING) {
                 connectWebSocket()
             }
@@ -467,6 +511,7 @@ class ClipSyncForegroundService : Service() {
             if (sent) {
                 ClipboardStateManager.markSent(text)
                 pendingOutboundText = null
+                FloatingSyncButtonManager.notifySyncResult(true, "Synced to Mac")
                 Log.i(TAG, "[$corrId] Successfully synced text to broker ($itemId, ${text.length} chars, hash=${hash.take(8)})")
 
                 val preview = if (text.length > 30) text.take(30) + "..." else text
@@ -488,10 +533,12 @@ class ClipSyncForegroundService : Service() {
             } else {
                 Log.w(TAG, "[$corrId] ws.send returned false. Buffered text for reconnect.")
                 pendingOutboundText = text
+                FloatingSyncButtonManager.notifySyncResult(false, "Sync failed")
             }
 
         } catch (e: Exception) {
             Log.e(TAG, "[$corrId] Failed to broadcast text: ${e.message}")
+            FloatingSyncButtonManager.notifySyncResult(false, "Send error")
         }
     }
 
@@ -573,12 +620,24 @@ class ClipSyncForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val toggleBallIntent = Intent(this, ClipSyncForegroundService::class.java).apply {
+            action = ACTION_TOGGLE_FLOATING_BUTTON
+        }
+        val toggleBallPendingIntent = PendingIntent.getService(
+            this,
+            2,
+            toggleBallIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val ballActionTitle = if (::floatingButtonManager.isInitialized && floatingButtonManager.isAttached) "Hide Ball" else "Show Ball"
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("ClipSync — Tap to Sync to Mac")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_menu_agenda)
             .setContentIntent(syncPendingIntent)
             .addAction(android.R.drawable.ic_menu_send, "Sync to Mac", syncPendingIntent)
+            .addAction(android.R.drawable.ic_menu_manage, ballActionTitle, toggleBallPendingIntent)
             .setOngoing(true)
             .build()
     }
@@ -618,6 +677,9 @@ class ClipSyncForegroundService : Service() {
         isExplicitlyStopped = true
         cancelScheduledReconnect()
         try {
+            floatingButtonManager.destroy()
+        } catch (_: Exception) {}
+        try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIFICATION_ALERT_ID)
         } catch (_: Exception) {}
@@ -649,6 +711,10 @@ class ClipSyncForegroundService : Service() {
         const val EXTRA_IS_MANUAL = "extra_is_manual"
         const val EXTRA_RECONNECT = "extra_reconnect"
         const val EXTRA_SYNC_ID = "extra_sync_id"
+
+        const val ACTION_SHOW_FLOATING_BUTTON = "com.clipsync.action.SHOW_FLOATING_BUTTON"
+        const val ACTION_HIDE_FLOATING_BUTTON = "com.clipsync.action.HIDE_FLOATING_BUTTON"
+        const val ACTION_TOGGLE_FLOATING_BUTTON = "com.clipsync.action.TOGGLE_FLOATING_BUTTON"
 
         const val ACTION_ITEM_RECEIVED = "com.clipsync.ITEM_RECEIVED"
         const val ACTION_CONNECTION_STATE = "com.clipsync.CONNECTION_STATE"

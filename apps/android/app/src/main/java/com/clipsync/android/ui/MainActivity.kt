@@ -6,10 +6,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -34,6 +36,7 @@ import com.clipsync.android.service.ClipboardStateManager
 import com.clipsync.android.storage.SecureStorage
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.gson.Gson
 import okhttp3.Call
 import okhttp3.Callback
@@ -88,6 +91,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnClearHistory: MaterialButton
     private lateinit var txtEmptyHistory: TextView
     private lateinit var recyclerHistory: RecyclerView
+    private lateinit var switchFloatingButton: MaterialSwitch
 
     private var currentConnectionState: String = ClipSyncForegroundService.STATE_DISCONNECTED
 
@@ -198,6 +202,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
 
         refreshUIFromStorage()
+        updateFloatingSwitchState()
         if (secureStorage.hasCredentials()) {
             fetchDevices()
             startSyncService()
@@ -366,6 +371,75 @@ class MainActivity : AppCompatActivity() {
             updateHistoryVisibility()
             Toast.makeText(this, "History cleared", Toast.LENGTH_SHORT).show()
         }
+
+        switchFloatingButton = findViewById(R.id.switchFloatingButton)
+        switchFloatingButton.setOnCheckedChangeListener { _, isChecked ->
+            handleFloatingButtonToggle(isChecked)
+        }
+    }
+
+    private fun updateFloatingSwitchState() {
+        val canDraw = Settings.canDrawOverlays(this)
+        val isEnabled = secureStorage.isFloatingButtonEnabled && canDraw
+        switchFloatingButton.setOnCheckedChangeListener(null)
+        switchFloatingButton.isChecked = isEnabled
+        switchFloatingButton.setOnCheckedChangeListener { _, isChecked ->
+            handleFloatingButtonToggle(isChecked)
+        }
+
+        if (isEnabled) {
+            val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                action = ClipSyncForegroundService.ACTION_SHOW_FLOATING_BUTTON
+            }
+            ContextCompat.startForegroundService(this, intent)
+        }
+    }
+
+    private fun handleFloatingButtonToggle(enable: Boolean) {
+        if (enable) {
+            if (!Settings.canDrawOverlays(this)) {
+                showOverlayPermissionDialog()
+            } else {
+                secureStorage.isFloatingButtonEnabled = true
+                val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                    action = ClipSyncForegroundService.ACTION_SHOW_FLOATING_BUTTON
+                }
+                ContextCompat.startForegroundService(this, intent)
+            }
+        } else {
+            secureStorage.isFloatingButtonEnabled = false
+            val intent = Intent(this, ClipSyncForegroundService::class.java).apply {
+                action = ClipSyncForegroundService.ACTION_HIDE_FLOATING_BUTTON
+            }
+            ContextCompat.startForegroundService(this, intent)
+        }
+    }
+
+    private fun showOverlayPermissionDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Enable Floating Sync Button")
+            .setMessage(
+                "To display the tennis-ball button above other apps so you can 1-tap sync copied text from SwiftKey (or any app) to your Mac, Android requires the 'Display over other apps' permission.\n\nTap Continue to grant this permission in Android Settings."
+            )
+            .setPositiveButton("Continue") { _, _ ->
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to open overlay settings: ${e.message}")
+                    Toast.makeText(this, "Could not open overlay settings", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                updateFloatingSwitchState()
+            }
+            .setOnCancelListener {
+                updateFloatingSwitchState()
+            }
+            .show()
     }
 
     private fun setupToolbar() {

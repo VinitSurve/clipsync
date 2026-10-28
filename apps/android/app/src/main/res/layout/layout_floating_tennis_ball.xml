@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/containerFloating"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:padding="4dp">
+
+    <!-- Ephemeral Feedback Badge ("Synced to Mac", "Empty", "Offline") -->
+    <TextView
+        android:id="@+id/txtFeedbackBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="6dp"
+        android:background="@drawable/bg_floating_badge"
+        android:elevation="10dp"
+        android:singleLine="true"
+        android:text="Synced to Mac"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <!-- Tennis Ball Floating Button -->
+    <ImageView
+        android:id="@+id/imgTennisBall"
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:contentDescription="Sync clipboard to Mac"
+        android:elevation="8dp"
+        android:importantForAccessibility="yes"
+        android:src="@drawable/ic_tennis_ball" />
+
+</LinearLayout>
